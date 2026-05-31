@@ -6,4 +6,5 @@ dist
 .DS_Store
 data/*.sqlite
 data/*.sqlite-*
+data/html-sites/
 스크린샷 *.png

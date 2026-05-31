@@ -29,6 +29,10 @@ export function subscribeWallFolders(params, onValue) {
   return subscribe('/api/wall-folders', params, onValue);
 }
 
+export function subscribeHtmlSites(onValue, onError) {
+  return subscribe('/api/html-sites', {}, onValue, { onError });
+}
+
 export function subscribeWall(wallId, onValue, onError, params = {}) {
   return subscribe(
     `/api/walls/${wallId}`,
@@ -124,6 +128,14 @@ export function deleteWallColumn(wallId, column, columnCount, columnNames = {}) 
     method: 'POST',
     body: { column, columnCount, columnNames }
   });
+}
+
+export function createHtmlSite(data) {
+  return apiFetch('/api/html-sites', { method: 'POST', body: data });
+}
+
+export function deleteHtmlSite(siteId) {
+  return apiFetch(`/api/html-sites/${siteId}`, { method: 'DELETE' });
 }
 
 export function createComment(data) {

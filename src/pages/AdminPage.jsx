@@ -1,10 +1,10 @@
-import { Trash2, Wand2 } from 'lucide-react';
+import { Globe2, Trash2, Wand2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import Field from '../components/Field.jsx';
 import Layout from '../components/Layout.jsx';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { createUser, makePassword } from '../lib/auth';
-import { deleteUser, subscribeUsers } from '../lib/firestore';
+import { deleteUser, subscribeUsers, updateUser } from '../lib/firestore';
 import { dateText } from '../lib/ui';
 
 export default function AdminPage() {
@@ -29,6 +29,27 @@ export default function AdminPage() {
     });
     setMessage(`${form.id} 교사 계정을 발급했습니다.`);
     setForm({ id: '', password: makePassword(), displayName: '' });
+  }
+
+  async function toggleHtmlHosting(teacher, canHostHtml) {
+    setMessage('');
+    setTeachers((current) =>
+      current.map((item) => (item.uid === teacher.uid ? { ...item, canHostHtml } : item))
+    );
+
+    try {
+      const data = await updateUser(teacher.uid, { canHostHtml });
+      setTeachers((current) =>
+        current.map((item) => (item.uid === teacher.uid ? { ...item, ...data.user } : item))
+      );
+    } catch {
+      setTeachers((current) =>
+        current.map((item) =>
+          item.uid === teacher.uid ? { ...item, canHostHtml: teacher.canHostHtml } : item
+        )
+      );
+      setMessage('HTML 호스팅 권한을 변경하지 못했습니다. 서버 실행 상태를 확인해 주세요.');
+    }
   }
 
   return (
@@ -111,6 +132,17 @@ export default function AdminPage() {
                     <Trash2 size={16} />
                   </button>
                 </div>
+                <label className="mt-4 flex items-center justify-between gap-3 rounded-[8px] bg-white/75 px-3 py-2">
+                  <span className="inline-flex items-center gap-2 text-sm font-bold text-stone-700">
+                    <Globe2 size={16} />
+                    HTML 호스팅
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(teacher.canHostHtml)}
+                    onChange={(event) => toggleHtmlHosting(teacher, event.target.checked)}
+                  />
+                </label>
               </article>
             ))}
             {!teachers.length && (

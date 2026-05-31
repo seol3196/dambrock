@@ -11,6 +11,7 @@ import {
   initDb,
   now,
   toComment,
+  toHtmlSite,
   toPost,
   toPublicUser,
   toWall,
@@ -23,11 +24,14 @@ const DIST = path.join(ROOT, 'dist');
 const DEFAULT_PORT = Number(process.env.PORT || 47831);
 const HOST = process.env.HOST || '0.0.0.0';
 const CLIENT_DIR = fs.existsSync(DIST) ? DIST : ROOT;
+const HTML_SITES_DIR = path.join(path.dirname(DB_PATH), 'html-sites');
+const MAX_HTML_BYTES = 1024 * 1024 * 5;
 
 initDb();
+fs.mkdirSync(HTML_SITES_DIR, { recursive: true });
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '6mb' }));
 
 function tokenFrom(req) {
   const header = req.get('authorization') || '';
@@ -66,6 +70,13 @@ function requireRole(role) {
 function requireTeacherOrAdmin(req, res, next) {
   if (!req.user || !['teacher', 'admin'].includes(req.user.role)) {
     return res.status(403).json({ error: 'forbidden' });
+  }
+  return next();
+}
+
+function requireHtmlHosting(req, res, next) {
+  if (!req.user || req.user.role !== 'teacher' || !req.user.can_host_html) {
+    return res.status(403).json({ error: 'html-hosting-not-enabled' });
   }
   return next();
 }
@@ -109,6 +120,48 @@ function normalizePostTemplate(value) {
 
 function normalizeFolderName(value) {
   return String(value || '').trim().slice(0, 20);
+}
+
+function normalizeHtmlTitle(value) {
+  return String(value || '').trim().slice(0, 80) || 'HTML 사이트';
+}
+
+function htmlSiteFile(siteId) {
+  return path.join(HTML_SITES_DIR, siteId, 'index.html');
+}
+
+function writeHtmlSiteFile(siteId, html) {
+  const filePath = htmlSiteFile(siteId);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, html, 'utf8');
+}
+
+function removeHtmlSiteFiles(siteId) {
+  fs.rmSync(path.join(HTML_SITES_DIR, siteId), { recursive: true, force: true });
+}
+
+function makeSiteSlug() {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const slug = id('site_').replace(/^site_/, '').slice(0, 8);
+    const exists = db.prepare('SELECT 1 FROM html_sites WHERE slug = ?').get(slug);
+    if (!exists) return slug;
+  }
+  return id('site_').replace(/^site_/, '');
+}
+
+function normalizeHtml(value) {
+  const html = String(value || '');
+  if (!html.trim()) {
+    const error = new Error('html-required');
+    error.status = 400;
+    throw error;
+  }
+  if (Buffer.byteLength(html, 'utf8') > MAX_HTML_BYTES) {
+    const error = new Error('html-too-large');
+    error.status = 400;
+    throw error;
+  }
+  return html;
 }
 
 function canUseFolder(folderId, ownerId) {
@@ -225,8 +278,15 @@ app.patch('/api/users/:uid', requireUser, (req, res) => {
   if (!canEdit) return res.status(403).json({ error: 'forbidden' });
 
   const displayName = String(req.body.displayName || target.display_name).trim();
-  db.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE uid = ?').run(
+  const canHostHtml =
+    req.user.role === 'admin' && target.role === 'teacher' && req.body.canHostHtml != null
+      ? req.body.canHostHtml
+        ? 1
+        : 0
+      : target.can_host_html || 0;
+  db.prepare('UPDATE users SET display_name = ?, can_host_html = ?, updated_at = ? WHERE uid = ?').run(
     displayName,
+    canHostHtml,
     now(),
     target.uid
   );
@@ -739,6 +799,66 @@ app.delete('/api/comments/:id', requireUser, (req, res) => {
   if (comment.author_id !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
   db.prepare('DELETE FROM comments WHERE id = ?').run(comment.id);
   res.json({ ok: true });
+});
+
+app.get('/api/html-sites', requireUser, requireHtmlHosting, (req, res) => {
+  const rows = db
+    .prepare('SELECT * FROM html_sites WHERE owner_id = ? ORDER BY created_at DESC')
+    .all(req.user.uid);
+  res.json({ items: rows.map(toHtmlSite) });
+});
+
+app.post('/api/html-sites', requireUser, requireHtmlHosting, (req, res) => {
+  const siteId = id('html_');
+  const slug = makeSiteSlug();
+  const title = normalizeHtmlTitle(req.body.title);
+  const html = normalizeHtml(req.body.html);
+
+  db.prepare(
+    `INSERT INTO html_sites (id, slug, title, owner_id, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(siteId, slug, title, req.user.uid, now());
+
+  try {
+    writeHtmlSiteFile(siteId, html);
+  } catch (error) {
+    db.prepare('DELETE FROM html_sites WHERE id = ?').run(siteId);
+    throw error;
+  }
+
+  res.status(201).json({
+    site: toHtmlSite(db.prepare('SELECT * FROM html_sites WHERE id = ?').get(siteId))
+  });
+});
+
+app.delete('/api/html-sites/:id', requireUser, requireHtmlHosting, (req, res) => {
+  const site = db.prepare('SELECT * FROM html_sites WHERE id = ?').get(req.params.id);
+  if (!site) return res.status(404).json({ error: 'not-found' });
+  if (site.owner_id !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
+  db.prepare('DELETE FROM html_sites WHERE id = ?').run(site.id);
+  removeHtmlSiteFiles(site.id);
+  res.json({ ok: true });
+});
+
+app.get('/h/:slug', (req, res) => {
+  const site = db.prepare('SELECT * FROM html_sites WHERE slug = ?').get(req.params.slug);
+  if (!site) return res.status(404).send('HTML site not found.');
+  const filePath = htmlSiteFile(site.id);
+  if (!fs.existsSync(filePath)) return res.status(404).send('HTML file not found.');
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      'sandbox allow-scripts allow-forms allow-popups allow-modals',
+      "default-src * data: blob:",
+      "img-src * data: blob:",
+      "style-src * 'unsafe-inline'",
+      "script-src * 'unsafe-inline' 'unsafe-eval'",
+      'connect-src *',
+      "frame-ancestors 'none'"
+    ].join('; ')
+  );
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.sendFile(filePath);
 });
 
 app.use(express.static(CLIENT_DIR));

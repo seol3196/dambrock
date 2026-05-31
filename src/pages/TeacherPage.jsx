@@ -2,8 +2,10 @@ import {
   BrickWall,
   Copy,
   ExternalLink,
+  FileCode2,
   Folder,
   FolderPlus,
+  Globe2,
   KeyRound,
   Pencil,
   Plus,
@@ -22,12 +24,15 @@ import { createUser } from '../lib/auth';
 import {
   createWall,
   createWallFolder,
+  createHtmlSite,
+  deleteHtmlSite,
   deleteWallFolder,
   deleteStudentAccount,
   deleteStudentAccounts,
   deleteWall,
   setStudentPasswords,
   subscribeUsers,
+  subscribeHtmlSites,
   subscribeWallFolders,
   subscribeWalls,
   updateUser,
@@ -45,6 +50,7 @@ export default function TeacherPage() {
   const [students, setStudents] = useState([]);
   const [walls, setWalls] = useState([]);
   const [folders, setFolders] = useState([]);
+  const [htmlSites, setHtmlSites] = useState([]);
   const [studentForm, setStudentForm] = useState({
     prefix: 'class_',
     start: '01',
@@ -86,13 +92,21 @@ export default function TeacherPage() {
     );
     const unsubWalls = subscribeWalls({ ownerId: user.uid }, setWalls);
     const unsubFolders = subscribeWallFolders({ ownerId: user.uid }, setFolders);
+    const unsubHtmlSites = profile?.canHostHtml
+      ? subscribeHtmlSites(setHtmlSites, () => setHtmlSites([]))
+      : () => setHtmlSites([]);
 
     return () => {
       unsubStudents();
       unsubWalls();
       unsubFolders();
+      unsubHtmlSites();
     };
-  }, [user.uid]);
+  }, [profile?.canHostHtml, user.uid]);
+
+  useEffect(() => {
+    if (tab === 'html' && !profile?.canHostHtml) setTab('walls');
+  }, [profile?.canHostHtml, tab]);
 
   const aside = (
     <aside className="rounded-[8px] bg-white/85 p-3 shadow-soft">
@@ -116,6 +130,18 @@ export default function TeacherPage() {
         <Users size={18} />
         학생 관리
       </button>
+      {profile?.canHostHtml && (
+        <button
+          type="button"
+          onClick={() => setTab('html')}
+          className={`mt-2 flex h-11 w-full items-center gap-2 rounded-[8px] px-3 font-bold ${
+            tab === 'html' ? 'bg-stone-900 text-white' : 'text-stone-700'
+          }`}
+        >
+          <FileCode2 size={18} />
+          HTML 호스팅
+        </button>
+      )}
     </aside>
   );
 
@@ -289,6 +315,8 @@ export default function TeacherPage() {
           submitSingle={createSingleStudent}
           students={students}
         />
+      ) : tab === 'html' && profile?.canHostHtml ? (
+        <HtmlHostingManager sites={htmlSites} origin={origin} />
       ) : (
         <WallManager
           form={wallForm}
@@ -797,6 +825,159 @@ function StudentManager({
           </form>
         </div>
       )}
+    </div>
+  );
+}
+
+function HtmlHostingManager({ sites, origin }) {
+  const [title, setTitle] = useState('');
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    if (!file) {
+      setMessage('업로드할 HTML 파일을 선택해 주세요.');
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith('.html') && !file.name.toLowerCase().endsWith('.htm')) {
+      setMessage('html 또는 htm 파일만 업로드할 수 있습니다.');
+      return;
+    }
+
+    setBusy(true);
+    setMessage('');
+    try {
+      const html = await file.text();
+      const data = await createHtmlSite({
+        title: title.trim() || file.name.replace(/\.(html|htm)$/i, ''),
+        html
+      });
+      setTitle('');
+      setFile(null);
+      formElement.reset();
+      setMessage(`${origin}${data.site.urlPath} 주소로 발급했습니다.`);
+    } catch (error) {
+      const code = error?.code || '';
+      if (code === 'html-too-large') setMessage('HTML 파일은 5MB 이하만 업로드할 수 있습니다.');
+      else if (code === 'html-required') setMessage('비어 있는 HTML 파일은 업로드할 수 없습니다.');
+      else setMessage('HTML 파일을 업로드하지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copySiteLink(site) {
+    const url = `${origin}${site.urlPath}`;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setMessage('HTML 사이트 링크를 복사했습니다.');
+    } catch {
+      setMessage(url);
+    }
+  }
+
+  async function removeSite(site) {
+    const ok = window.confirm(`${site.title} 사이트를 삭제할까요? 발급된 URL도 더 이상 열리지 않습니다.`);
+    if (!ok) return;
+    await deleteHtmlSite(site.id);
+  }
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[420px_1fr]">
+      <form onSubmit={submit} className="rounded-[8px] bg-white/90 p-5 shadow-soft">
+        <div className="flex items-center gap-2">
+          <Globe2 size={20} className="text-amber-700" />
+          <h2 className="text-xl font-bold text-stone-950">HTML 파일 호스팅</h2>
+        </div>
+        <div className="mt-5 space-y-4">
+          <Field label="사이트 이름">
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              className="h-11 w-full rounded-[8px] border border-stone-200 px-3"
+              placeholder="우리 반 안내 페이지"
+            />
+          </Field>
+          <Field label="HTML 파일">
+            <input
+              required
+              type="file"
+              accept=".html,.htm,text/html"
+              onChange={(event) => setFile(event.target.files?.[0] || null)}
+              className="block w-full rounded-[8px] border border-stone-200 bg-white px-3 py-2 text-sm"
+            />
+          </Field>
+        </div>
+        <button
+          type="submit"
+          disabled={busy}
+          className="mt-5 h-11 w-full rounded-[8px] bg-stone-900 font-bold text-white disabled:opacity-50"
+        >
+          {busy ? '업로드 중...' : '업로드하고 URL 발급'}
+        </button>
+        {message && <p className="mt-3 break-all text-sm font-bold text-emerald-700">{message}</p>}
+        <p className="mt-3 text-sm leading-6 text-stone-600">
+          업로드된 파일은 서버 로컬의 data/html-sites 폴더에 저장됩니다.
+        </p>
+      </form>
+
+      <section className="rounded-[8px] bg-white/90 p-5 shadow-soft">
+        <h2 className="text-xl font-bold text-stone-950">발급된 HTML 사이트</h2>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {sites.map((site) => (
+            <article key={site.id} className="rounded-[8px] border border-stone-200 bg-amber-50 p-4">
+              <h3 className="font-bold text-stone-950">{site.title}</h3>
+              <p className="mt-1 break-all text-sm text-stone-600">{origin}{site.urlPath}</p>
+              <p className="mt-2 text-xs text-stone-500">생성 시간 {dateText(site.createdAt)}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => copySiteLink(site)}
+                  className="inline-flex items-center gap-1 rounded-[8px] bg-white px-3 py-2 text-sm font-bold"
+                >
+                  <Copy size={15} />
+                  링크 복사
+                </button>
+                <a
+                  href={site.urlPath}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 rounded-[8px] bg-stone-900 px-3 py-2 text-sm font-bold text-white"
+                >
+                  <ExternalLink size={15} />
+                  열기
+                </a>
+                <button
+                  type="button"
+                  onClick={() => removeSite(site)}
+                  className="inline-flex items-center gap-1 rounded-[8px] bg-white px-3 py-2 text-sm font-bold text-red-600"
+                >
+                  <Trash2 size={15} />
+                  삭제
+                </button>
+              </div>
+            </article>
+          ))}
+          {!sites.length && (
+            <p className="text-sm text-stone-500">아직 업로드한 HTML 사이트가 없습니다.</p>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

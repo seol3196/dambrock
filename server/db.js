@@ -39,6 +39,20 @@ export function toPublicUser(row) {
     displayName: row.display_name,
     teacherId: row.teacher_id,
     passwordHint: row.password_hint,
+    canHostHtml: Boolean(row.can_host_html),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export function toHtmlSite(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    slug: row.slug,
+    title: row.title,
+    ownerId: row.owner_id,
+    urlPath: `/h/${row.slug}`,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -123,6 +137,7 @@ export function initDb() {
       display_name TEXT NOT NULL,
       teacher_id TEXT,
       password_hint TEXT,
+      can_host_html INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT
     );
@@ -190,13 +205,28 @@ export function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS html_sites (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      owner_id TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
     CREATE INDEX IF NOT EXISTS idx_users_teacher ON users(teacher_id);
     CREATE INDEX IF NOT EXISTS idx_walls_owner ON walls(owner_id);
     CREATE INDEX IF NOT EXISTS idx_wall_folders_owner ON wall_folders(owner_id);
     CREATE INDEX IF NOT EXISTS idx_posts_wall ON posts(wall_id);
     CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);
+    CREATE INDEX IF NOT EXISTS idx_html_sites_owner ON html_sites(owner_id);
   `);
+
+  const userColumns = db.prepare('PRAGMA table_info(users)').all();
+  if (!userColumns.some((column) => column.name === 'can_host_html')) {
+    db.prepare('ALTER TABLE users ADD COLUMN can_host_html INTEGER NOT NULL DEFAULT 0').run();
+  }
 
   const wallColumns = db.prepare('PRAGMA table_info(walls)').all();
   if (!wallColumns.some((column) => column.name === 'show_author_names')) {
