@@ -101,18 +101,59 @@ export async function exportWallCsv(wallId) {
 }
 
 export function createPost(data) {
+  const payload = {
+    ...data,
+    images: undefined,
+    worksheetImages: undefined,
+    column: data.column || 1,
+    order: data.order ?? Date.now()
+  };
+  const images = Array.isArray(data.images) ? data.images : [];
+  const worksheetImages = data.worksheetImages && typeof data.worksheetImages === 'object'
+    ? data.worksheetImages
+    : {};
+  const worksheetImageEntries = Object.entries(worksheetImages).filter(([, file]) => file);
+  if (!images.length && !worksheetImageEntries.length) {
+    return apiFetch('/api/posts', {
+      method: 'POST',
+      body: payload
+    });
+  }
+
+  const formData = new FormData();
+  formData.append('payload', JSON.stringify(payload));
+  for (const image of images) formData.append('images', image, image.name || 'image');
+  for (const [fieldId, image] of worksheetImageEntries) {
+    formData.append(`images:${fieldId}`, image, image.name || 'image');
+  }
   return apiFetch('/api/posts', {
     method: 'POST',
-    body: {
-      ...data,
-      column: data.column || 1,
-      order: data.order ?? Date.now()
-    }
+    body: formData
   });
 }
 
 export function updatePost(postId, data) {
-  return apiFetch(`/api/posts/${postId}`, { method: 'PATCH', body: data });
+  const payload = {
+    ...data,
+    images: undefined,
+    worksheetImages: undefined
+  };
+  const images = Array.isArray(data.images) ? data.images : [];
+  const worksheetImages = data.worksheetImages && typeof data.worksheetImages === 'object'
+    ? data.worksheetImages
+    : {};
+  const worksheetImageEntries = Object.entries(worksheetImages).filter(([, file]) => file);
+  if (!images.length && !worksheetImageEntries.length) {
+    return apiFetch(`/api/posts/${postId}`, { method: 'PATCH', body: payload });
+  }
+
+  const formData = new FormData();
+  formData.append('payload', JSON.stringify(payload));
+  for (const image of images) formData.append('images', image, image.name || 'image');
+  for (const [fieldId, image] of worksheetImageEntries) {
+    formData.append(`images:${fieldId}`, image, image.name || 'image');
+  }
+  return apiFetch(`/api/posts/${postId}`, { method: 'PATCH', body: formData });
 }
 
 export function deletePost(postId) {

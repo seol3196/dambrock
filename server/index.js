@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import multer from 'multer';
 import {
   DB_PATH,
   db,
@@ -13,6 +14,7 @@ import {
   toComment,
   toHtmlSite,
   toPost,
+  toPostImage,
   toPublicUser,
   toWall,
   toWallFolder
@@ -25,13 +27,26 @@ const DEFAULT_PORT = Number(process.env.PORT || 47831);
 const HOST = process.env.HOST || '0.0.0.0';
 const CLIENT_DIR = fs.existsSync(DIST) ? DIST : ROOT;
 const HTML_SITES_DIR = path.join(path.dirname(DB_PATH), 'html-sites');
+const POST_IMAGES_DIR = path.join(path.dirname(DB_PATH), 'post-images');
 const MAX_HTML_BYTES = 1024 * 1024 * 5;
+const DEFAULT_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024 * 10;
+const MAX_POST_IMAGES = 8;
+const MAX_IMAGE_BYTES = 1024 * 1024 * 100;
 
 initDb();
 fs.mkdirSync(HTML_SITES_DIR, { recursive: true });
+fs.mkdirSync(POST_IMAGES_DIR, { recursive: true });
 
 const app = express();
+const uploadPostImages = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    files: MAX_POST_IMAGES,
+    fileSize: MAX_IMAGE_BYTES
+  }
+});
 app.use(express.json({ limit: '6mb' }));
+app.use('/uploads/post-images', express.static(POST_IMAGES_DIR));
 
 function tokenFrom(req) {
   const header = req.get('authorization') || '';
@@ -108,10 +123,11 @@ function normalizePostTemplate(value) {
   return {
     fields: fields.slice(0, 10).map((field, index) => {
       const label = String(field?.label || '').trim().slice(0, 80);
+      const type = ['shortText', 'longText', 'image'].includes(field?.type) ? field.type : 'shortText';
       return {
         id: String(field?.id || `field_${index + 1}`).replace(/[^\w-]/g, '').slice(0, 40) || `field_${index + 1}`,
         label: label || `질문 ${index + 1}`,
-        type: field?.type === 'longText' ? 'longText' : 'shortText',
+        type,
         required: field?.required !== false
       };
     })
@@ -164,6 +180,243 @@ function normalizeHtml(value) {
   return html;
 }
 
+function normalizeStorageLimit(value, fallback = DEFAULT_STORAGE_LIMIT_BYTES) {
+  if (value === null) return null;
+  if (value === undefined || value === '') return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    const error = new Error('invalid-storage-limit');
+    error.status = 400;
+    throw error;
+  }
+  return Math.floor(number);
+}
+
+function parsePostBody(req) {
+  if (req.is('multipart/form-data')) {
+    const rawPayload = String(req.body.payload || '{}');
+    try {
+      return JSON.parse(rawPayload);
+    } catch {
+      const error = new Error('invalid-post-payload');
+      error.status = 400;
+      throw error;
+    }
+  }
+  return req.body || {};
+}
+
+function safeUploadExtension(file) {
+  const fromName = path.extname(file.originalname || '').toLowerCase().replace(/[^.\w]/g, '');
+  if (fromName && fromName.length <= 12) return fromName;
+  if (file.mimetype === 'image/jpeg') return '.jpg';
+  if (file.mimetype === 'image/png') return '.png';
+  if (file.mimetype === 'image/gif') return '.gif';
+  if (file.mimetype === 'image/webp') return '.webp';
+  if (file.mimetype === 'image/heic') return '.heic';
+  if (file.mimetype === 'image/heif') return '.heif';
+  return '';
+}
+
+function normalizePostImageFiles(files, user) {
+  const images = (files || [])
+    .filter((file) => file.fieldname === 'images' || file.fieldname.startsWith('images:'))
+    .map((file) => ({
+      file,
+      fieldId: file.fieldname.startsWith('images:')
+        ? file.fieldname.slice('images:'.length).replace(/[^\w-]/g, '').slice(0, 40) || null
+        : null
+    }));
+  if (images.length > MAX_POST_IMAGES) {
+    const error = new Error('too-many-images');
+    error.status = 400;
+    throw error;
+  }
+  if (images.length && !user) {
+    const error = new Error('image-upload-requires-login');
+    error.status = 401;
+    throw error;
+  }
+  for (const image of images) {
+    if (!String(image.file.mimetype || '').startsWith('image/')) {
+      const error = new Error('image-file-required');
+      error.status = 400;
+      throw error;
+    }
+  }
+  return images;
+}
+
+function assertStorageAvailable(user, files) {
+  if (!files.length) return;
+  const totalSize = files.reduce((sum, image) => sum + image.file.size, 0);
+  const limit = user.storage_limit_bytes;
+  if (limit == null) return;
+  if ((user.storage_used_bytes || 0) + totalSize > limit) {
+    const error = new Error('storage-limit-exceeded');
+    error.status = 413;
+    throw error;
+  }
+}
+
+function storageOwnerForWall(wall) {
+  const owner = db.prepare('SELECT * FROM users WHERE uid = ?').get(wall.ownerId);
+  if (!owner) {
+    const error = new Error('storage-owner-not-found');
+    error.status = 404;
+    throw error;
+  }
+  return owner;
+}
+
+function postImagesFor(postId) {
+  return db
+    .prepare('SELECT * FROM post_images WHERE post_id = ? ORDER BY created_at ASC')
+    .all(postId)
+    .map(toPostImage);
+}
+
+function postWithImages(row) {
+  const post = toPost(row);
+  if (!post) return null;
+  return {
+    ...post,
+    images: postImagesFor(post.id)
+  };
+}
+
+function postsForWall(wallId) {
+  return db
+    .prepare('SELECT * FROM posts WHERE wall_id = ? ORDER BY order_no ASC')
+    .all(wallId)
+    .map(postWithImages);
+}
+
+function storedPostImagePath(storedName) {
+  return path.join(POST_IMAGES_DIR, storedName);
+}
+
+function removeImageFiles(imageRows) {
+  for (const image of imageRows) {
+    fs.rmSync(storedPostImagePath(image.stored_name), { force: true });
+  }
+}
+
+function decrementStorageForImages(imageRows) {
+  const byOwner = new Map();
+  for (const image of imageRows) {
+    byOwner.set(image.owner_id, (byOwner.get(image.owner_id) || 0) + Number(image.size_bytes || 0));
+  }
+  for (const [ownerId, bytes] of byOwner) {
+    db.prepare(
+      `UPDATE users
+       SET storage_used_bytes = MAX(0, storage_used_bytes - ?), updated_at = ?
+       WHERE uid = ?`
+    ).run(bytes, now(), ownerId);
+  }
+}
+
+function imagesForPostIds(postIds) {
+  if (!postIds.length) return [];
+  const placeholders = postIds.map(() => '?').join(',');
+  return db.prepare(`SELECT * FROM post_images WHERE post_id IN (${placeholders})`).all(...postIds);
+}
+
+function uniqueImages(imageRows) {
+  const seen = new Set();
+  const uniqueRows = [];
+  for (const image of imageRows) {
+    if (seen.has(image.id)) continue;
+    seen.add(image.id);
+    uniqueRows.push(image);
+  }
+  return uniqueRows;
+}
+
+function deletePostsWithImages(whereSql, params) {
+  const posts = db.prepare(`SELECT id FROM posts ${whereSql}`).all(...params);
+  const postIds = posts.map((post) => post.id);
+  const images = imagesForPostIds(postIds);
+  db.transaction(() => {
+    decrementStorageForImages(images);
+    db.prepare(`DELETE FROM posts ${whereSql}`).run(...params);
+  })();
+  removeImageFiles(images);
+}
+
+function deleteImageRows(imageRows) {
+  const images = uniqueImages(imageRows);
+  if (!images.length) return;
+  db.transaction(() => {
+    decrementStorageForImages(images);
+    const removeImage = db.prepare('DELETE FROM post_images WHERE id = ?');
+    for (const image of images) removeImage.run(image.id);
+  })();
+  removeImageFiles(images);
+}
+
+function imagesForPostFieldIds(postId, fieldIds) {
+  const safeFieldIds = fieldIds.filter(Boolean);
+  if (!safeFieldIds.length) return [];
+  const placeholders = safeFieldIds.map(() => '?').join(',');
+  return db
+    .prepare(`SELECT * FROM post_images WHERE post_id = ? AND field_id IN (${placeholders})`)
+    .all(postId, ...safeFieldIds);
+}
+
+function savePostImages(postId, ownerId, files) {
+  const created = now();
+  const rows = files.map((image) => {
+    const file = image.file;
+    const storedName = `${id('img_')}${safeUploadExtension(file)}`;
+    return {
+      id: id('pimg_'),
+      postId,
+      ownerId,
+      fieldId: image.fieldId,
+      storedName,
+      originalName: String(file.originalname || 'image').slice(0, 180),
+      mimeType: file.mimetype,
+      sizeBytes: file.size,
+      createdAt: created,
+      file
+    };
+  });
+
+  try {
+    for (const row of rows) {
+      fs.writeFileSync(storedPostImagePath(row.storedName), row.file.buffer);
+    }
+    db.transaction(() => {
+      const insertImage = db.prepare(
+        `INSERT INTO post_images
+         (id, post_id, owner_id, field_id, stored_name, original_name, mime_type, size_bytes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const row of rows) {
+        insertImage.run(
+          row.id,
+          row.postId,
+          row.ownerId,
+          row.fieldId,
+          row.storedName,
+          row.originalName,
+          row.mimeType,
+          row.sizeBytes,
+          row.createdAt
+        );
+      }
+      const totalSize = rows.reduce((sum, row) => sum + row.sizeBytes, 0);
+      db.prepare(
+        'UPDATE users SET storage_used_bytes = storage_used_bytes + ?, updated_at = ? WHERE uid = ?'
+      ).run(totalSize, now(), ownerId);
+    })();
+  } catch (error) {
+    removeImageFiles(rows.map((row) => ({ stored_name: row.storedName })));
+    throw error;
+  }
+}
+
 function canUseFolder(folderId, ownerId) {
   if (!folderId) return true;
   const folder = db.prepare('SELECT * FROM wall_folders WHERE id = ?').get(folderId);
@@ -174,6 +427,10 @@ function worksheetContent(template, answers) {
   const fields = Array.isArray(template?.fields) ? template.fields : [];
   return fields
     .map((field) => {
+      if (field.type === 'image') {
+        const answer = String(answers?.[field.id] || '').trim();
+        return answer ? `${field.label}\n${answer}` : '';
+      }
       const answer = String(answers?.[field.id] || '').trim();
       return `${field.label}\n${answer}`;
     })
@@ -185,10 +442,31 @@ function normalizeTemplateAnswers(template, value) {
   const answers = value && typeof value === 'object' ? value : {};
   const nextAnswers = {};
   for (const field of template.fields || []) {
+    if (field.type === 'image') {
+      nextAnswers[field.id] = String(answers[field.id] || '').trim() ? '[사진]' : '';
+      continue;
+    }
     const limit = field.type === 'longText' ? 1000 : 100;
     nextAnswers[field.id] = String(answers[field.id] || '').trim().slice(0, limit);
   }
   return nextAnswers;
+}
+
+function validateWorksheetImages(template, imageFiles) {
+  const imageFields = (template.fields || []).filter((field) => field.type === 'image');
+  const allowedFieldIds = new Set(imageFields.map((field) => field.id));
+  const imageFieldIds = new Set(imageFiles.map((image) => image.fieldId).filter(Boolean));
+  if (imageFiles.some((image) => !image.fieldId || !allowedFieldIds.has(image.fieldId))) {
+    const error = new Error('invalid-worksheet-image-field');
+    error.status = 400;
+    throw error;
+  }
+  const missingField = imageFields.find((field) => field.required !== false && !imageFieldIds.has(field.id));
+  if (missingField) {
+    const error = new Error('worksheet-image-required');
+    error.status = 400;
+    throw error;
+  }
 }
 
 app.get('/api/health', (_req, res) => {
@@ -253,12 +531,24 @@ app.post('/api/users', requireUser, requireTeacherOrAdmin, (req, res) => {
   const displayName = String(req.body.displayName || loginId).trim();
   const teacherId = role === 'student' ? req.body.teacherId || req.user.uid : null;
   const passwordHint = req.body.passwordHint || null;
+  const storageLimitBytes =
+    role === 'teacher' ? normalizeStorageLimit(req.body.storageLimitBytes) : 0;
   try {
     db.prepare(
       `INSERT INTO users
-       (uid, login_id, password_hash, role, display_name, teacher_id, password_hint, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(uid, loginId, bcrypt.hashSync(password, 12), role, displayName, teacherId, passwordHint, now());
+       (uid, login_id, password_hash, role, display_name, teacher_id, password_hint, storage_limit_bytes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      uid,
+      loginId,
+      bcrypt.hashSync(password, 12),
+      role,
+      displayName,
+      teacherId,
+      passwordHint,
+      storageLimitBytes,
+      now()
+    );
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'id-already-exists' });
@@ -284,12 +574,17 @@ app.patch('/api/users/:uid', requireUser, (req, res) => {
         ? 1
         : 0
       : target.can_host_html || 0;
-  db.prepare('UPDATE users SET display_name = ?, can_host_html = ?, updated_at = ? WHERE uid = ?').run(
-    displayName,
-    canHostHtml,
-    now(),
-    target.uid
-  );
+  const canEditStorageLimit = req.user.role === 'admin' && target.role === 'teacher';
+  const storageLimitBytes =
+    canEditStorageLimit && req.body.storageLimitBytes !== undefined
+      ? normalizeStorageLimit(req.body.storageLimitBytes, target.storage_limit_bytes)
+      : target.storage_limit_bytes;
+  if (storageLimitBytes != null && storageLimitBytes < (target.storage_used_bytes || 0)) {
+    return res.status(400).json({ error: 'storage-limit-below-used' });
+  }
+  db.prepare(
+    'UPDATE users SET display_name = ?, can_host_html = ?, storage_limit_bytes = ?, updated_at = ? WHERE uid = ?'
+  ).run(displayName, canHostHtml, storageLimitBytes, now(), target.uid);
   res.json({ user: toPublicUser(db.prepare('SELECT * FROM users WHERE uid = ?').get(target.uid)) });
 });
 
@@ -300,7 +595,27 @@ app.delete('/api/users/:uid', requireUser, (req, res) => {
     req.user.role === 'admin' ||
     (req.user.role === 'teacher' && target.role === 'student' && target.teacher_id === req.user.uid);
   if (!canDelete) return res.status(403).json({ error: 'forbidden' });
-  db.prepare('DELETE FROM users WHERE uid = ?').run(target.uid);
+  const ownedImages = db.prepare('SELECT * FROM post_images WHERE owner_id = ?').all(target.uid);
+  const wallPostIds =
+    target.role === 'teacher'
+      ? db
+          .prepare(
+            `SELECT posts.id
+             FROM posts
+             JOIN walls ON walls.id = posts.wall_id
+             WHERE walls.owner_id = ?`
+          )
+          .all(target.uid)
+          .map((post) => post.id)
+      : [];
+  const wallImages = imagesForPostIds(wallPostIds);
+  const images = uniqueImages([...ownedImages, ...wallImages]);
+  db.transaction(() => {
+    decrementStorageForImages(images);
+    if (ownedImages.length) db.prepare('DELETE FROM post_images WHERE owner_id = ?').run(target.uid);
+    db.prepare('DELETE FROM users WHERE uid = ?').run(target.uid);
+  })();
+  removeImageFiles(images);
   res.json({ count: 1, deleted: [{ uid: target.uid }] });
 });
 
@@ -413,8 +728,8 @@ app.post('/api/walls', requireUser, requireRole('teacher'), (req, res) => {
     `INSERT INTO walls
      (id, title, description, access_mode, comments_enabled, likes_enabled, owner_id, owner_name,
       show_author_names, visible_to_students, public_view_enabled, folder_id, post_mode, post_template, background_tone,
-      column_mode_enabled, column_count, column_names, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      image_uploads_enabled, column_mode_enabled, column_count, column_names, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     wallId,
     String(req.body.title || '').trim(),
@@ -431,6 +746,7 @@ app.post('/api/walls', requireUser, requireRole('teacher'), (req, res) => {
     postMode,
     JSON.stringify(postTemplate),
     req.body.backgroundTone || 'bg-[#fff8e8]',
+    req.body.imageUploadsEnabled === false ? 0 : 1,
     req.body.columnModeEnabled === true ? 1 : 0,
     Number(req.body.columnCount || 4),
     JSON.stringify(req.body.columnNames || {}),
@@ -477,6 +793,7 @@ app.patch('/api/walls/:id', requireUser, requireRole('teacher'), (req, res) => {
       folder_id = ?,
       post_mode = COALESCE(?, post_mode),
       post_template = COALESCE(?, post_template),
+      image_uploads_enabled = COALESCE(?, image_uploads_enabled),
       background_tone = COALESCE(?, background_tone),
       column_mode_enabled = COALESCE(?, column_mode_enabled),
       column_count = COALESCE(?, column_count),
@@ -495,6 +812,7 @@ app.patch('/api/walls/:id', requireUser, requireRole('teacher'), (req, res) => {
     nextFolderId === undefined ? wall.folder_id : nextFolderId,
     nextPostMode,
     nextPostTemplate,
+    req.body.imageUploadsEnabled == null ? null : req.body.imageUploadsEnabled ? 1 : 0,
     req.body.backgroundTone == null ? null : req.body.backgroundTone,
     req.body.columnModeEnabled == null ? null : req.body.columnModeEnabled ? 1 : 0,
     req.body.columnCount == null ? null : Number(req.body.columnCount),
@@ -579,7 +897,13 @@ app.delete('/api/walls/:id', requireUser, requireRole('teacher'), (req, res) => 
   const wall = db.prepare('SELECT * FROM walls WHERE id = ?').get(req.params.id);
   if (!wall) return res.status(404).json({ error: 'not-found' });
   if (wall.owner_id !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
-  db.prepare('DELETE FROM walls WHERE id = ?').run(wall.id);
+  const postIds = db.prepare('SELECT id FROM posts WHERE wall_id = ?').all(wall.id).map((post) => post.id);
+  const images = imagesForPostIds(postIds);
+  db.transaction(() => {
+    decrementStorageForImages(images);
+    db.prepare('DELETE FROM walls WHERE id = ?').run(wall.id);
+  })();
+  removeImageFiles(images);
   res.json({ ok: true });
 });
 
@@ -594,59 +918,121 @@ app.get('/api/posts', (req, res) => {
   if (wall.accessMode === 'login' && !userFrom(req) && req.query.view !== 'readonly') {
     return res.status(401).json({ error: 'unauthenticated' });
   }
-  const rows = db.prepare('SELECT * FROM posts WHERE wall_id = ? ORDER BY order_no ASC').all(wallId);
-  res.json({ items: rows.map(toPost) });
+  res.json({ items: postsForWall(wallId) });
 });
 
-app.post('/api/posts', (req, res) => {
-  const wall = toWall(db.prepare('SELECT * FROM walls WHERE id = ?').get(req.body.wallId));
+app.post('/api/posts', uploadPostImages.any(), (req, res) => {
+  const body = parsePostBody(req);
+  const wall = toWall(db.prepare('SELECT * FROM walls WHERE id = ?').get(body.wallId));
   if (!wall) return res.status(404).json({ error: 'not-found' });
   const user = userFrom(req);
   if (wall.accessMode === 'login' && !user) return res.status(401).json({ error: 'unauthenticated' });
+  const imageFiles = normalizePostImageFiles(req.files, user);
+  if (wall.postMode === 'free' && imageFiles.length && !wall.imageUploadsEnabled) {
+    return res.status(403).json({ error: 'image-uploads-disabled' });
+  }
+  if (wall.postMode === 'worksheet') {
+    validateWorksheetImages(wall.postTemplate, imageFiles);
+  } else if (imageFiles.some((image) => image.fieldId)) {
+    return res.status(400).json({ error: 'invalid-image-field' });
+  }
+  const storageOwner = imageFiles.length ? storageOwnerForWall(wall) : null;
+  if (storageOwner) assertStorageAvailable(storageOwner, imageFiles);
   const postId = id('post_');
+  const rawTemplateAnswers =
+    wall.postMode === 'worksheet'
+      ? {
+          ...(body.templateAnswers || {}),
+          ...Object.fromEntries(imageFiles.map((image) => [image.fieldId, '[사진]']).filter(([fieldId]) => fieldId))
+        }
+      : body.templateAnswers;
   const templateAnswers =
     wall.postMode === 'worksheet'
-      ? normalizeTemplateAnswers(wall.postTemplate, req.body.templateAnswers)
+      ? normalizeTemplateAnswers(wall.postTemplate, rawTemplateAnswers)
       : {};
   const content =
     wall.postMode === 'worksheet'
       ? worksheetContent(wall.postTemplate, templateAnswers)
-      : String(req.body.content || '').trim();
-  if (!content) return res.status(400).json({ error: 'content-required' });
-  db.prepare(
-    `INSERT INTO posts
-     (id, wall_id, author_id, author_name, content, template_answers, color, column_no, order_no, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    postId,
-    wall.id,
-    user?.uid || 'anonymous',
-    String(req.body.authorName || user?.display_name || '익명'),
-    content,
-    JSON.stringify(templateAnswers),
-    req.body.color || 'bg-yellow-100',
-    Number(req.body.column || 1),
-    Number(req.body.order ?? Date.now()),
-    now()
-  );
-  res.status(201).json({ post: toPost(db.prepare('SELECT * FROM posts WHERE id = ?').get(postId)) });
+      : String(body.content || '').trim();
+  if (!content && !imageFiles.length) return res.status(400).json({ error: 'content-required' });
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO posts
+       (id, wall_id, author_id, author_name, content, template_answers, color, column_no, order_no, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      postId,
+      wall.id,
+      user?.uid || 'anonymous',
+      String(body.authorName || user?.display_name || '익명'),
+      content,
+      JSON.stringify(templateAnswers),
+      body.color || 'bg-yellow-100',
+      Number(body.column || 1),
+      Number(body.order ?? Date.now()),
+      now()
+    );
+  })();
+  if (imageFiles.length) savePostImages(postId, storageOwner.uid, imageFiles);
+  res.status(201).json({ post: postWithImages(db.prepare('SELECT * FROM posts WHERE id = ?').get(postId)) });
 });
 
-app.patch('/api/posts/:id', requireUser, (req, res) => {
+app.patch('/api/posts/:id', requireUser, uploadPostImages.any(), (req, res) => {
+  const body = parsePostBody(req);
   const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
   if (!post) return res.status(404).json({ error: 'not-found' });
   const wall = toWall(db.prepare('SELECT * FROM walls WHERE id = ?').get(post.wall_id));
   const canEdit = post.author_id === req.user.uid || wall?.ownerId === req.user.uid;
   if (!canEdit) return res.status(403).json({ error: 'forbidden' });
-  const templateAnswers =
-    req.body.templateAnswers == null
+  const imageFiles = normalizePostImageFiles(req.files, req.user);
+  if (wall.postMode === 'free' && imageFiles.length && !wall.imageUploadsEnabled) {
+    return res.status(403).json({ error: 'image-uploads-disabled' });
+  }
+  if (wall.postMode === 'worksheet') {
+    const imageFields = (wall.postTemplate?.fields || []).filter((field) => field.type === 'image');
+    const allowedFieldIds = new Set(imageFields.map((field) => field.id));
+    if (imageFiles.some((image) => !image.fieldId || !allowedFieldIds.has(image.fieldId))) {
+      return res.status(400).json({ error: 'invalid-worksheet-image-field' });
+    }
+  } else if (imageFiles.some((image) => image.fieldId)) {
+    return res.status(400).json({ error: 'invalid-image-field' });
+  }
+
+  const deleteImageIds = Array.isArray(body.deleteImageIds)
+    ? body.deleteImageIds.map((value) => String(value)).filter(Boolean)
+    : [];
+  const replaceFieldIds = wall.postMode === 'worksheet'
+    ? [...new Set(imageFiles.map((image) => image.fieldId).filter(Boolean))]
+    : [];
+  const imagesToDelete = [];
+  if (deleteImageIds.length) {
+    const placeholders = deleteImageIds.map(() => '?').join(',');
+    imagesToDelete.push(
+      ...db
+        .prepare(`SELECT * FROM post_images WHERE post_id = ? AND id IN (${placeholders})`)
+        .all(post.id, ...deleteImageIds)
+    );
+  }
+  imagesToDelete.push(...imagesForPostFieldIds(post.id, replaceFieldIds));
+  const storageOwner = imageFiles.length ? storageOwnerForWall(wall) : null;
+  if (storageOwner) assertStorageAvailable(storageOwner, imageFiles);
+
+  const rawTemplateAnswers =
+    body.templateAnswers == null
       ? null
-      : normalizeTemplateAnswers(wall.postTemplate || { fields: [] }, req.body.templateAnswers);
+      : {
+          ...(body.templateAnswers || {}),
+          ...Object.fromEntries(imageFiles.map((image) => [image.fieldId, '[사진]']).filter(([fieldId]) => fieldId))
+        };
+  const templateAnswers =
+    rawTemplateAnswers == null
+      ? null
+      : normalizeTemplateAnswers(wall.postTemplate || { fields: [] }, rawTemplateAnswers);
   const content =
     templateAnswers == null
-      ? req.body.content == null
+      ? body.content == null
         ? null
-        : String(req.body.content)
+        : String(body.content)
       : worksheetContent(wall.postTemplate || { fields: [] }, templateAnswers);
   db.prepare(
     `UPDATE posts SET
@@ -660,13 +1046,15 @@ app.patch('/api/posts/:id', requireUser, (req, res) => {
   ).run(
     content,
     templateAnswers == null ? null : JSON.stringify(templateAnswers),
-    req.body.color == null ? null : req.body.color,
-    req.body.column == null ? null : Number(req.body.column),
-    req.body.order == null ? null : Number(req.body.order),
+    body.color == null ? null : body.color,
+    body.column == null ? null : Number(body.column),
+    body.order == null ? null : Number(body.order),
     now(),
     post.id
   );
-  res.json({ post: toPost(db.prepare('SELECT * FROM posts WHERE id = ?').get(post.id)) });
+  deleteImageRows(imagesToDelete);
+  if (imageFiles.length) savePostImages(post.id, storageOwner.uid, imageFiles);
+  res.json({ post: postWithImages(db.prepare('SELECT * FROM posts WHERE id = ?').get(post.id)) });
 });
 
 app.delete('/api/posts/:id', requireUser, (req, res) => {
@@ -675,7 +1063,7 @@ app.delete('/api/posts/:id', requireUser, (req, res) => {
   const wall = db.prepare('SELECT * FROM walls WHERE id = ?').get(post.wall_id);
   const canDelete = post.author_id === req.user.uid || wall?.owner_id === req.user.uid;
   if (!canDelete) return res.status(403).json({ error: 'forbidden' });
-  db.prepare('DELETE FROM posts WHERE id = ?').run(post.id);
+  deletePostsWithImages('WHERE id = ?', [post.id]);
   res.json({ ok: true });
 });
 
@@ -736,12 +1124,13 @@ app.post('/api/walls/:id/delete-column', requireUser, requireRole('teacher'), (r
   }
 
   db.transaction(() => {
-    const deletedPosts = db
-      .prepare('SELECT id FROM posts WHERE wall_id = ? AND column_no = ?')
-      .all(wall.id, column);
+    const deletedPosts = db.prepare('SELECT id FROM posts WHERE wall_id = ? AND column_no = ?').all(wall.id, column);
+    const deletedPostIds = deletedPosts.map((post) => post.id);
+    const deletedImages = imagesForPostIds(deletedPostIds);
     for (const post of deletedPosts) {
       db.prepare('DELETE FROM comments WHERE post_id = ?').run(post.id);
     }
+    decrementStorageForImages(deletedImages);
     db.prepare('DELETE FROM posts WHERE wall_id = ? AND column_no = ?').run(wall.id, column);
     db.prepare(
       'UPDATE posts SET column_no = column_no - 1, updated_at = ? WHERE wall_id = ? AND column_no > ?'
@@ -752,6 +1141,7 @@ app.post('/api/walls/:id/delete-column', requireUser, requireRole('teacher'), (r
       now(),
       wall.id
     );
+    removeImageFiles(deletedImages);
   })();
   res.json({ ok: true });
 });
@@ -870,6 +1260,15 @@ app.use((req, res, next) => {
 });
 
 app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'image-too-large' });
+    }
+    if (error.code === 'LIMIT_FILE_COUNT' || error.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ error: 'too-many-images' });
+    }
+    return res.status(400).json({ error: 'invalid-upload' });
+  }
   console.error(error);
   res.status(error.status || 500).json({ error: error.message || 'server-error' });
 });

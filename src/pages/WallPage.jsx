@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Copy,
   Download,
+  ImagePlus,
   MoreHorizontal,
   Plus,
   Send,
@@ -29,6 +30,7 @@ import {
 } from '../lib/firestore';
 
 const MAX_COLUMN_NAME_LENGTH = 10;
+const MAX_POST_IMAGE_COUNT = 8;
 
 function homePath(role) {
   if (role === 'teacher') return '/teacher';
@@ -123,6 +125,32 @@ function worksheetSummary(fields, answers) {
     .join('\n\n');
 }
 
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(1)}GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`;
+  if (value >= 1024) return `${Math.ceil(value / 1024)}KB`;
+  return `${value}B`;
+}
+
+function AttachedImagePreview({ file }) {
+  const [previewUrl, setPreviewUrl] = useState('');
+
+  useEffect(() => {
+    const nextUrl = URL.createObjectURL(file);
+    setPreviewUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [file]);
+
+  return (
+    <img
+      src={previewUrl}
+      alt=""
+      className="h-14 w-14 rounded-[8px] object-cover"
+    />
+  );
+}
+
 export default function WallPage() {
   const { wallId } = useParams();
   const location = useLocation();
@@ -151,6 +179,12 @@ export default function WallPage() {
     color: colorOptions[0].value,
     templateAnswers: {}
   });
+  const [imageFiles, setImageFiles] = useState([]);
+  const [worksheetImages, setWorksheetImages] = useState({});
+  const [existingPostImages, setExistingPostImages] = useState([]);
+  const [deleteImageIds, setDeleteImageIds] = useState([]);
+  const [activeImageFieldId, setActiveImageFieldId] = useState(null);
+  const [postError, setPostError] = useState('');
   const [settingsForm, setSettingsForm] = useState(null);
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
   const shareUrl = `${origin}/wall/${wallId}`;
@@ -241,6 +275,7 @@ export default function WallPage() {
               visibleToStudents: nextWall.visibleToStudents ?? true,
               publicViewEnabled: nextWall.publicViewEnabled ?? false,
               columnModeEnabled: nextWall.columnModeEnabled ?? false,
+              imageUploadsEnabled: nextWall.imageUploadsEnabled ?? true,
               postMode: nextWall.postMode || 'free',
               postTemplate: nextWall.postTemplate || { fields: [] },
               backgroundTone: nextWall.backgroundTone || wallBackgroundOptions[0].value
@@ -331,7 +366,10 @@ export default function WallPage() {
     }
 
     const templateAnswers = Object.fromEntries(
-      templateFields.map((field) => [field.id, String(form.templateAnswers?.[field.id] || '').trim()])
+      templateFields.map((field) => [
+        field.id,
+        field.type === 'image' ? (worksheetImages[field.id] ? '[사진]' : '') : String(form.templateAnswers?.[field.id] || '').trim()
+      ])
     );
     if (isWorksheetWall) {
       const missingField = templateFields.find(
@@ -341,7 +379,7 @@ export default function WallPage() {
         alert(`${missingField.label} 항목을 입력해 주세요.`);
         return;
       }
-    } else if (!form.content.trim()) {
+    } else if (!form.content.trim() && !imageFiles.length) {
       return;
     }
 
@@ -351,21 +389,47 @@ export default function WallPage() {
         : sharedColumn
       : null;
 
-    await createPost({
-      wallId,
-      authorId: user?.uid || 'anonymous',
-      authorName: profile?.displayName || displayId || '익명',
-      content: isWorksheetWall ? worksheetSummary(templateFields, templateAnswers) : form.content.trim(),
-      templateAnswers: isWorksheetWall ? templateAnswers : undefined,
-      color: form.color,
-      ...(targetColumn
-        ? nextColumnPostPlacement(postsByColumn, targetColumn)
-        : nextPostPlacement(postsByColumn, columnNumbers))
-    });
+    setPostError('');
+    try {
+      await createPost({
+        wallId,
+        authorId: user?.uid || 'anonymous',
+        authorName: profile?.displayName || displayId || '익명',
+        content: isWorksheetWall ? worksheetSummary(templateFields, templateAnswers) : form.content.trim(),
+        templateAnswers: isWorksheetWall ? templateAnswers : undefined,
+        color: form.color,
+        images: isWorksheetWall ? [] : imageFiles,
+        worksheetImages: isWorksheetWall ? worksheetImages : undefined,
+        ...(targetColumn
+          ? nextColumnPostPlacement(postsByColumn, targetColumn)
+          : nextPostPlacement(postsByColumn, columnNumbers))
+      });
 
-    setForm({ content: '', color: colorOptions[0].value, templateAnswers: emptyWorksheetAnswers(templateFields) });
-    setPostTargetColumn(null);
-    setModalOpen(false);
+      setForm({ content: '', color: colorOptions[0].value, templateAnswers: emptyWorksheetAnswers(templateFields) });
+      setImageFiles([]);
+      setWorksheetImages({});
+      setExistingPostImages([]);
+      setDeleteImageIds([]);
+      setActiveImageFieldId(null);
+      setPostTargetColumn(null);
+      setModalOpen(false);
+    } catch (error) {
+      if (error?.code === 'storage-limit-exceeded') {
+        setPostError('계정에 할당된 저장 용량을 초과했습니다. 선생님이나 관리자에게 용량 조정을 요청해 주세요.');
+      } else if (error?.code === 'image-upload-requires-login') {
+        setPostError('사진 첨부는 로그인한 계정만 사용할 수 있습니다.');
+      } else if (error?.code === 'image-file-required') {
+        setPostError('이미지 파일만 첨부할 수 있습니다.');
+      } else if (error?.code === 'too-many-images') {
+        setPostError(`사진은 한 게시글에 최대 ${MAX_POST_IMAGE_COUNT}장까지 첨부할 수 있습니다.`);
+      } else if (error?.code === 'image-too-large') {
+        setPostError('사진 한 장은 최대 100MB까지 첨부할 수 있습니다.');
+      } else if (error?.code === 'invalid-upload') {
+        setPostError('사진 업로드 형식을 처리하지 못했습니다. 다른 사진으로 다시 시도해 주세요.');
+      } else {
+        setPostError('게시글을 올리지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      }
+    }
   }
 
   function openCreatePostModal(column = null) {
@@ -377,6 +441,12 @@ export default function WallPage() {
       color: colorOptions[0].value,
       templateAnswers: emptyWorksheetAnswers(templateFields)
     });
+    setImageFiles([]);
+    setWorksheetImages({});
+    setExistingPostImages([]);
+    setDeleteImageIds([]);
+    setActiveImageFieldId(null);
+    setPostError('');
     setModalOpen(true);
   }
 
@@ -392,6 +462,12 @@ export default function WallPage() {
         ...(post.templateAnswers || {})
       }
     });
+    setImageFiles([]);
+    setWorksheetImages({});
+    setExistingPostImages(post.images || []);
+    setDeleteImageIds([]);
+    setActiveImageFieldId(null);
+    setPostError('');
     setModalOpen(true);
   }
 
@@ -401,21 +477,37 @@ export default function WallPage() {
 
     if (!isWorksheetWall) {
       const nextContent = form.content.trim();
-      if (!nextContent) return;
+      const remainingImages = existingPostImages.filter((image) => !deleteImageIds.includes(image.id));
+      if (!nextContent && !remainingImages.length && !imageFiles.length) return;
 
       await updatePost(editingPost.id, {
         content: nextContent,
-        color: form.color
+        color: form.color,
+        images: imageFiles,
+        deleteImageIds
       });
       setEditingPost(null);
       setPostTargetColumn(null);
       setForm({ content: '', color: colorOptions[0].value, templateAnswers: emptyWorksheetAnswers(templateFields) });
+      setImageFiles([]);
+      setWorksheetImages({});
+      setExistingPostImages([]);
+      setDeleteImageIds([]);
+      setActiveImageFieldId(null);
       setModalOpen(false);
       return;
     }
 
     const templateAnswers = Object.fromEntries(
-      templateFields.map((field) => [field.id, String(form.templateAnswers?.[field.id] || '').trim()])
+      templateFields.map((field) => {
+        if (field.type === 'image') {
+          const existingImage = existingPostImages.find(
+            (image) => image.fieldId === field.id && !deleteImageIds.includes(image.id)
+          );
+          return [field.id, worksheetImages[field.id] || existingImage ? '[사진]' : ''];
+        }
+        return [field.id, String(form.templateAnswers?.[field.id] || '').trim()];
+      })
     );
     const missingField = templateFields.find(
       (field) => field.required !== false && !templateAnswers[field.id]
@@ -427,12 +519,83 @@ export default function WallPage() {
 
     await updatePost(editingPost.id, {
       color: form.color,
-      templateAnswers
+      templateAnswers,
+      worksheetImages,
+      deleteImageIds
     });
     setEditingPost(null);
     setPostTargetColumn(null);
     setForm({ content: '', color: colorOptions[0].value, templateAnswers: emptyWorksheetAnswers(templateFields) });
+    setImageFiles([]);
+    setWorksheetImages({});
+    setExistingPostImages([]);
+    setDeleteImageIds([]);
+    setActiveImageFieldId(null);
     setModalOpen(false);
+  }
+
+  function addImageFiles(files) {
+    const nextFiles = Array.from(files || []).filter((file) => file.type.startsWith('image/'));
+    if (!nextFiles.length) return;
+    setPostError('');
+    setImageFiles((current) => {
+      const availableCount = Math.max(0, MAX_POST_IMAGE_COUNT - current.length);
+      const selected = nextFiles.slice(0, availableCount);
+      if (selected.length < nextFiles.length) {
+        setPostError(`사진은 한 게시글에 최대 ${MAX_POST_IMAGE_COUNT}장까지 첨부할 수 있습니다.`);
+      }
+      return [...current, ...selected];
+    });
+  }
+
+  function handlePasteImages(event) {
+    const files = Array.from(event.clipboardData?.items || [])
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (isWorksheetWall) {
+      const imageFields = templateFields.filter((field) => field.type === 'image');
+      const targetField =
+        imageFields.find((field) => field.id === activeImageFieldId) ||
+        imageFields.find((field) => !worksheetImages[field.id]) ||
+        imageFields[0];
+      if (targetField) setWorksheetImage(targetField.id, files[0]);
+      return;
+    }
+    if (wall?.imageUploadsEnabled === false) return;
+    addImageFiles(files);
+  }
+
+  function removeImageFile(index) {
+    setImageFiles((current) => current.filter((_file, fileIndex) => fileIndex !== index));
+  }
+
+  function removeExistingImage(imageId) {
+    setDeleteImageIds((current) => (current.includes(imageId) ? current : [...current, imageId]));
+  }
+
+  function setWorksheetImage(fieldId, file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    setPostError('');
+    setWorksheetImages((current) => ({
+      ...current,
+      [fieldId]: file
+    }));
+  }
+
+  function removeWorksheetImage(fieldId) {
+    setWorksheetImages((current) => {
+      const nextImages = { ...current };
+      delete nextImages[fieldId];
+      return nextImages;
+    });
+  }
+
+  function existingWorksheetImage(fieldId) {
+    return existingPostImages.find((image) => image.fieldId === fieldId && !deleteImageIds.includes(image.id));
   }
 
   function columnShareUrl(column) {
@@ -1014,6 +1177,22 @@ export default function WallPage() {
                       className="h-4 w-4 shrink-0 accent-stone-900"
                     />
                   </label>
+                  {settingsForm.postMode !== 'worksheet' && (
+                    <label className="flex items-center justify-between gap-4 py-3">
+                      <span>
+                        <b className="block text-sm text-stone-900">사진 업로드 허용</b>
+                        <span className="text-xs text-stone-500">자유 포스트잇 작성 화면에 사진 첨부 표시</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={settingsForm.imageUploadsEnabled !== false}
+                        onChange={(e) =>
+                          setSettingsForm({ ...settingsForm, imageUploadsEnabled: e.target.checked })
+                        }
+                        className="h-4 w-4 shrink-0 accent-stone-900"
+                      />
+                    </label>
+                  )}
                 </div>
               </section>
 
@@ -1085,9 +1264,13 @@ export default function WallPage() {
       )}
 
       {modalOpen && (
-        <div className="fixed inset-0 z-20 grid place-items-center bg-stone-950/45 px-4">
+        <div
+          className="fixed inset-0 z-20 grid place-items-center bg-stone-950/45 px-4"
+          onPaste={handlePasteImages}
+        >
           <form
             onSubmit={editingPost ? savePostEdit : submitPost}
+            onPaste={handlePasteImages}
             className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-[18px] bg-white p-5 shadow-paper"
           >
             <div className="flex items-center justify-between">
@@ -1109,12 +1292,105 @@ export default function WallPage() {
             {isWorksheetWall ? (
               <div className="mt-4 space-y-4">
                 {templateFields.map((field) => (
-                  <label key={field.id} className="block">
+                  <div key={field.id} className="block">
                     <span className="mb-2 block text-sm font-bold text-stone-800">
                       {field.label}
                       {field.required !== false && <span className="text-rose-500"> *</span>}
                     </span>
-                    {field.type === 'longText' ? (
+                    {field.type === 'image' ? (
+                      <div
+                        className={`rounded-[12px] border border-dashed p-3 transition ${
+                          activeImageFieldId === field.id
+                            ? 'border-stone-900 bg-stone-100 ring-2 ring-stone-900/10'
+                            : 'border-stone-300 bg-stone-50'
+                        }`}
+                        tabIndex={0}
+                        onClick={() => setActiveImageFieldId(field.id)}
+                        onFocus={() => setActiveImageFieldId(field.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setActiveImageFieldId(field.id);
+                          }
+                        }}
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="inline-flex items-center gap-2 text-xs font-black text-stone-700">
+                              {activeImageFieldId === field.id && (
+                                <span className="rounded-full bg-stone-900 px-2 py-0.5 text-[11px] text-white">
+                                  선택됨
+                                </span>
+                              )}
+                              이 칸을 클릭한 뒤 Ctrl+V
+                            </p>
+                            <p className="mt-1 text-xs font-semibold text-stone-500">
+                              또는 우측 파일 선택을 클릭
+                            </p>
+                          </div>
+                          <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-[8px] bg-white px-3 text-sm font-bold text-stone-800 shadow-sm ring-1 ring-stone-200">
+                            <ImagePlus size={15} />
+                            파일 선택
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="sr-only"
+                              onFocus={() => setActiveImageFieldId(field.id)}
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (file) setWorksheetImage(field.id, file);
+                                event.target.value = '';
+                              }}
+                            />
+                          </label>
+                        </div>
+                        {worksheetImages[field.id] ? (
+                          <div className="mt-3 flex items-center gap-3 rounded-[10px] bg-white p-2 ring-1 ring-stone-200">
+                            <AttachedImagePreview file={worksheetImages[field.id]} />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-bold text-stone-800">
+                                {worksheetImages[field.id].name || '붙여넣은 이미지'}
+                              </p>
+                              <p className="text-xs font-semibold text-stone-500">
+                                {formatBytes(worksheetImages[field.id].size)}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeWorksheetImage(field.id)}
+                              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-stone-500 hover:bg-stone-100 hover:text-red-600"
+                              aria-label="첨부 사진 제거"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
+                        ) : existingWorksheetImage(field.id) ? (
+                          <div className="mt-3 flex items-center gap-3 rounded-[10px] bg-white p-2 ring-1 ring-stone-200">
+                            <img
+                              src={existingWorksheetImage(field.id).url}
+                              alt={existingWorksheetImage(field.id).originalName || field.label}
+                              className="h-14 w-14 rounded-[8px] object-cover"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-bold text-stone-800">
+                                {existingWorksheetImage(field.id).originalName || '기존 사진'}
+                              </p>
+                              <p className="text-xs font-semibold text-stone-500">
+                                새 사진을 선택하면 기존 사진이 교체됩니다.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeExistingImage(existingWorksheetImage(field.id).id)}
+                              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-stone-500 hover:bg-stone-100 hover:text-red-600"
+                              aria-label="기존 사진 제거"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : field.type === 'longText' ? (
                       <textarea
                         value={form.templateAnswers?.[field.id] || ''}
                         maxLength={1000}
@@ -1145,7 +1421,7 @@ export default function WallPage() {
                         className="h-11 w-full rounded-[10px] border border-stone-200 px-3 text-base outline-none focus:border-amber-500"
                       />
                     )}
-                  </label>
+                  </div>
                 ))}
               </div>
             ) : (
@@ -1155,6 +1431,100 @@ export default function WallPage() {
                 className="mt-4 min-h-40 w-full resize-y rounded-[10px] border border-stone-200 p-3 text-base leading-7 outline-none focus:border-amber-500"
                 placeholder="생각이나 링크를 자유롭게 적어보세요."
               />
+            )}
+            {!isWorksheetWall &&
+              (wall?.imageUploadsEnabled !== false ||
+                existingPostImages.some((image) => !image.fieldId && !deleteImageIds.includes(image.id))) && (
+              <section className="mt-4 rounded-[12px] border border-dashed border-stone-300 bg-stone-50 p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="inline-flex items-center gap-2 text-sm font-black text-stone-800">
+                      <ImagePlus size={16} />
+                      사진 첨부
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-stone-500">
+                      파일을 선택하거나 이미지를 복사한 뒤 이 창에서 Ctrl+V로 붙여넣으세요.
+                    </p>
+                  </div>
+                  {wall?.imageUploadsEnabled !== false && (
+                    <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-[8px] bg-white px-3 text-sm font-bold text-stone-800 shadow-sm ring-1 ring-stone-200">
+                      <ImagePlus size={15} />
+                      파일 선택
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="sr-only"
+                        onChange={(event) => {
+                          addImageFiles(event.target.files);
+                          event.target.value = '';
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {existingPostImages.some((image) => !image.fieldId && !deleteImageIds.includes(image.id)) && (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {existingPostImages
+                      .filter((image) => !image.fieldId && !deleteImageIds.includes(image.id))
+                      .map((image) => (
+                        <div
+                          key={image.id}
+                          className="flex items-center gap-3 rounded-[10px] bg-white p-2 ring-1 ring-stone-200"
+                        >
+                          <img
+                            src={image.url}
+                            alt={image.originalName || '기존 사진'}
+                            className="h-14 w-14 rounded-[8px] object-cover"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-bold text-stone-800">{image.originalName || '기존 사진'}</p>
+                            <p className="text-xs font-semibold text-stone-500">기존 첨부</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeExistingImage(image.id)}
+                            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-stone-500 hover:bg-stone-100 hover:text-red-600"
+                            aria-label="기존 사진 제거"
+                          >
+                            <X size={15} />
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                )}
+
+                {imageFiles.length > 0 && (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {imageFiles.map((file, index) => (
+                      <div
+                        key={`${file.name}-${file.size}-${index}`}
+                        className="flex items-center gap-3 rounded-[10px] bg-white p-2 ring-1 ring-stone-200"
+                      >
+                        <AttachedImagePreview file={file} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-bold text-stone-800">{file.name || '붙여넣은 이미지'}</p>
+                          <p className="text-xs font-semibold text-stone-500">{formatBytes(file.size)}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeImageFile(index)}
+                          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-stone-500 hover:bg-stone-100 hover:text-red-600"
+                          aria-label="첨부 사진 제거"
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+            {postError && (
+              <p className="mt-3 rounded-[8px] bg-red-50 px-3 py-2 text-sm font-bold text-red-700">
+                {postError}
+              </p>
             )}
             <div className="mt-4 flex flex-wrap gap-2">
               {colorOptions.map((color) => (

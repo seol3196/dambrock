@@ -6,6 +6,7 @@ import {
   Folder,
   FolderPlus,
   Globe2,
+  HardDrive,
   KeyRound,
   Pencil,
   Plus,
@@ -44,6 +45,14 @@ import { dateText, paddedNumber, wallTone } from '../lib/ui';
 
 const RESET_PASSWORD = '123456';
 
+function storageText(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(1)}GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`;
+  if (value >= 1024) return `${Math.ceil(value / 1024)}KB`;
+  return `${value}B`;
+}
+
 export default function TeacherPage() {
   const { user, displayId, profile } = useAuth();
   const [tab, setTab] = useState('walls');
@@ -74,6 +83,7 @@ export default function TeacherPage() {
     publicViewEnabled: false,
     folderId: null,
     columnModeEnabled: false,
+    imageUploadsEnabled: true,
     postMode: 'free',
     postTemplate: {
       fields: [
@@ -84,6 +94,10 @@ export default function TeacherPage() {
   });
   const quote = useMemo(() => pickRandomQuote(), []);
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
+  const storageUsedBytes = Number(profile?.storageUsedBytes || 0);
+  const storageLimitBytes = Number(profile?.storageLimitBytes || 0);
+  const storagePercent =
+    storageLimitBytes > 0 ? Math.min(100, Math.round((storageUsedBytes / storageLimitBytes) * 100)) : 0;
 
   useEffect(() => {
     const unsubStudents = subscribeUsers(
@@ -110,38 +124,53 @@ export default function TeacherPage() {
 
   const aside = (
     <aside className="rounded-[8px] bg-white/85 p-3 shadow-soft">
-      <button
-        type="button"
-        onClick={() => setTab('walls')}
-        className={`flex h-11 w-full items-center gap-2 rounded-[8px] px-3 font-bold ${
-          tab === 'walls' ? 'bg-stone-900 text-white' : 'text-stone-700'
-        }`}
-      >
-        <BrickWall size={18} />
-        내 담벼락
-      </button>
-      <button
-        type="button"
-        onClick={() => setTab('students')}
-        className={`mt-2 flex h-11 w-full items-center gap-2 rounded-[8px] px-3 font-bold ${
-          tab === 'students' ? 'bg-stone-900 text-white' : 'text-stone-700'
-        }`}
-      >
-        <Users size={18} />
-        학생 관리
-      </button>
-      {profile?.canHostHtml && (
+      <div>
         <button
           type="button"
-          onClick={() => setTab('html')}
-          className={`mt-2 flex h-11 w-full items-center gap-2 rounded-[8px] px-3 font-bold ${
-            tab === 'html' ? 'bg-stone-900 text-white' : 'text-stone-700'
+          onClick={() => setTab('walls')}
+          className={`flex h-11 w-full items-center gap-2 rounded-[8px] px-3 font-bold ${
+            tab === 'walls' ? 'bg-stone-900 text-white' : 'text-stone-700'
           }`}
         >
-          <FileCode2 size={18} />
-          HTML 호스팅
+          <BrickWall size={18} />
+          내 담벼락
         </button>
-      )}
+        <button
+          type="button"
+          onClick={() => setTab('students')}
+          className={`mt-2 flex h-11 w-full items-center gap-2 rounded-[8px] px-3 font-bold ${
+            tab === 'students' ? 'bg-stone-900 text-white' : 'text-stone-700'
+          }`}
+        >
+          <Users size={18} />
+          학생 관리
+        </button>
+        {profile?.canHostHtml && (
+          <button
+            type="button"
+            onClick={() => setTab('html')}
+            className={`mt-2 flex h-11 w-full items-center gap-2 rounded-[8px] px-3 font-bold ${
+              tab === 'html' ? 'bg-stone-900 text-white' : 'text-stone-700'
+            }`}
+          >
+            <FileCode2 size={18} />
+            HTML 호스팅
+          </button>
+        )}
+      </div>
+
+      <section className="mt-4 rounded-[8px] border border-stone-200 bg-stone-50 p-3">
+        <div className="flex items-center gap-2 text-sm font-black text-stone-800">
+          <HardDrive size={16} />
+          사진 저장 공간
+        </div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+          <div className="h-full rounded-full bg-stone-900" style={{ width: `${storagePercent}%` }} />
+        </div>
+        <p className="mt-2 text-xs font-bold text-stone-600">
+          사용량 {storageText(storageUsedBytes)} / 할당량 {storageText(storageLimitBytes)}
+        </p>
+      </section>
     </aside>
   );
 
@@ -286,6 +315,7 @@ export default function TeacherPage() {
       publicViewEnabled: false,
       folderId: null,
       columnModeEnabled: false,
+      imageUploadsEnabled: true,
       postMode: 'free',
       postTemplate: {
         fields: [
@@ -1250,6 +1280,23 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
               </ul>
             </div>
           )}
+          {form.postMode === 'free' && (
+            <label className="flex items-center justify-between rounded-[8px] border border-stone-200 px-4 py-3">
+              <span>
+                <b className="block text-sm text-stone-900">사진 업로드 허용</b>
+                <span className="text-sm text-stone-600">
+                  켜면 자유 포스트잇 작성 화면에 사진 첨부가 표시됩니다.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={form.imageUploadsEnabled !== false}
+                onChange={(event) =>
+                  setForm({ ...form, imageUploadsEnabled: event.target.checked })
+                }
+              />
+            </label>
+          )}
           <label className="flex items-center justify-between rounded-[8px] border border-stone-200 px-4 py-3">
             <span>
               <b className="block text-sm text-stone-900">로그인 필요</b>
@@ -1346,7 +1393,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                     <label className="flex items-center gap-1">
                       <input
                         type="radio"
-                        checked={field.type !== 'longText'}
+                        checked={field.type === 'shortText' || !['longText', 'image'].includes(field.type)}
                         onChange={() => setTemplateField(field.id, { type: 'shortText' })}
                       />
                       짧은 답변
@@ -1358,6 +1405,14 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                         onChange={() => setTemplateField(field.id, { type: 'longText' })}
                       />
                       긴 답변
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input
+                        type="radio"
+                        checked={field.type === 'image'}
+                        onChange={() => setTemplateField(field.id, { type: 'image' })}
+                      />
+                      사진
                     </label>
                     <label className="flex items-center gap-1">
                       <input

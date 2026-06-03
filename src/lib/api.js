@@ -22,8 +22,9 @@ function queryString(params = {}) {
 }
 
 export async function apiFetch(path, options = {}) {
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = {
-    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(options.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
     ...(options.headers || {})
   };
   const token = getToken();
@@ -32,7 +33,7 @@ export async function apiFetch(path, options = {}) {
   const response = await fetch(path, {
     ...options,
     headers,
-    body: options.body ? JSON.stringify(options.body) : undefined
+    body: options.body ? (isFormData ? options.body : JSON.stringify(options.body)) : undefined
   });
 
   if (!response.ok) {

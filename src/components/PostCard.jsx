@@ -46,6 +46,12 @@ export default function PostCard({
   );
   const isWorksheetPost = wall.postMode === 'worksheet';
   const worksheetFields = Array.isArray(wall.postTemplate?.fields) ? wall.postTemplate.fields : [];
+  const imagesByField = new Map(
+    (post.images || [])
+      .filter((image) => image.fieldId)
+      .map((image) => [image.fieldId, image])
+  );
+  const freeImages = (post.images || []).filter((image) => !image.fieldId);
   const canSeeHiddenAuthorNames = Boolean(
     !readOnly && role === 'teacher' && user?.uid === wall.ownerId
   );
@@ -142,17 +148,40 @@ export default function PostCard({
       {isWorksheetPost ? (
         <div className="space-y-3">
           {worksheetFields
-            .filter((field) => String(post.templateAnswers?.[field.id] || '').trim())
-            .map((field) => (
-              <section key={field.id} className="rounded-[8px] bg-white/45 px-3 py-2">
-                <h3 className="text-xs font-black text-stone-500">
-                  {field.label}
-                </h3>
-                <p className="mt-1 whitespace-pre-wrap break-words text-[1.02rem] font-semibold leading-7 text-stone-900">
-                  {post.templateAnswers[field.id]}
-                </p>
-              </section>
-            ))}
+            .filter((field) =>
+              field.type === 'image'
+                ? imagesByField.has(field.id)
+                : String(post.templateAnswers?.[field.id] || '').trim()
+            )
+            .map((field) => {
+              const image = field.type === 'image' ? imagesByField.get(field.id) : null;
+              return (
+                <section key={field.id} className="rounded-[8px] bg-white/45 px-3 py-2">
+                  <h3 className="text-xs font-black text-stone-500">
+                    {field.label}
+                  </h3>
+                  {image ? (
+                    <a
+                      href={image.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 block overflow-hidden rounded-[10px] bg-white/55 ring-1 ring-stone-900/10"
+                    >
+                      <img
+                        src={image.url}
+                        alt={image.originalName || field.label}
+                        className="max-h-[420px] w-full object-contain"
+                        loading="lazy"
+                      />
+                    </a>
+                  ) : (
+                    <p className="mt-1 whitespace-pre-wrap break-words text-[1.02rem] font-semibold leading-7 text-stone-900">
+                      {post.templateAnswers[field.id]}
+                    </p>
+                  )}
+                </section>
+              );
+            })}
         </div>
       ) : (
         <div>
@@ -174,6 +203,27 @@ export default function PostCard({
               )
             )}
           </p>
+        </div>
+      )}
+
+      {!isWorksheetPost && freeImages.length > 0 && (
+        <div className="mt-4 grid gap-2">
+          {freeImages.map((image) => (
+            <a
+              key={image.id}
+              href={image.url}
+              target="_blank"
+              rel="noreferrer"
+              className="block overflow-hidden rounded-[10px] bg-white/55 ring-1 ring-stone-900/10"
+            >
+              <img
+                src={image.url}
+                alt={image.originalName || '첨부 사진'}
+                className="max-h-[420px] w-full object-contain"
+                loading="lazy"
+              />
+            </a>
+          ))}
         </div>
       )}
 

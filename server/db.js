@@ -40,6 +40,8 @@ export function toPublicUser(row) {
     teacherId: row.teacher_id,
     passwordHint: row.password_hint,
     canHostHtml: Boolean(row.can_host_html),
+    storageLimitBytes: row.storage_limit_bytes,
+    storageUsedBytes: row.storage_used_bytes || 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -73,6 +75,7 @@ export function toWall(row) {
     folderId: row.folder_id || null,
     postMode: row.post_mode || 'free',
     postTemplate: json(row.post_template, { fields: [] }),
+    imageUploadsEnabled: row.image_uploads_enabled == null ? true : Boolean(row.image_uploads_enabled),
     ownerId: row.owner_id,
     ownerName: row.owner_name,
     backgroundTone: row.background_tone,
@@ -108,6 +111,7 @@ export function toPost(row) {
     color: row.color,
     column: row.column_no,
     order: row.order_no,
+    images: Array.isArray(row.images) ? row.images : json(row.images, []),
     likedBy,
     likeCount: row.like_count ?? Object.keys(likedBy).length,
     createdAt: row.created_at,
@@ -127,6 +131,21 @@ export function toComment(row) {
   };
 }
 
+export function toPostImage(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    postId: row.post_id,
+    ownerId: row.owner_id,
+    fieldId: row.field_id || null,
+    url: `/uploads/post-images/${row.stored_name}`,
+    originalName: row.original_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    createdAt: row.created_at
+  };
+}
+
 export function initDb() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -138,6 +157,8 @@ export function initDb() {
       teacher_id TEXT,
       password_hint TEXT,
       can_host_html INTEGER NOT NULL DEFAULT 0,
+      storage_limit_bytes INTEGER NOT NULL DEFAULT 10737418240,
+      storage_used_bytes INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT
     );
@@ -161,6 +182,7 @@ export function initDb() {
       folder_id TEXT,
       post_mode TEXT NOT NULL DEFAULT 'free',
       post_template TEXT NOT NULL DEFAULT '{"fields":[]}',
+      image_uploads_enabled INTEGER NOT NULL DEFAULT 1,
       owner_id TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
       owner_name TEXT NOT NULL,
       background_tone TEXT NOT NULL,
@@ -205,6 +227,18 @@ export function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS post_images (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      field_id TEXT,
+      stored_name TEXT NOT NULL UNIQUE,
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS html_sites (
       id TEXT PRIMARY KEY,
       slug TEXT NOT NULL UNIQUE,
@@ -219,6 +253,8 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_walls_owner ON walls(owner_id);
     CREATE INDEX IF NOT EXISTS idx_wall_folders_owner ON wall_folders(owner_id);
     CREATE INDEX IF NOT EXISTS idx_posts_wall ON posts(wall_id);
+    CREATE INDEX IF NOT EXISTS idx_post_images_post ON post_images(post_id);
+    CREATE INDEX IF NOT EXISTS idx_post_images_owner ON post_images(owner_id);
     CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);
     CREATE INDEX IF NOT EXISTS idx_html_sites_owner ON html_sites(owner_id);
   `);
@@ -226,6 +262,12 @@ export function initDb() {
   const userColumns = db.prepare('PRAGMA table_info(users)').all();
   if (!userColumns.some((column) => column.name === 'can_host_html')) {
     db.prepare('ALTER TABLE users ADD COLUMN can_host_html INTEGER NOT NULL DEFAULT 0').run();
+  }
+  if (!userColumns.some((column) => column.name === 'storage_limit_bytes')) {
+    db.prepare('ALTER TABLE users ADD COLUMN storage_limit_bytes INTEGER NOT NULL DEFAULT 10737418240').run();
+  }
+  if (!userColumns.some((column) => column.name === 'storage_used_bytes')) {
+    db.prepare('ALTER TABLE users ADD COLUMN storage_used_bytes INTEGER NOT NULL DEFAULT 0').run();
   }
 
   const wallColumns = db.prepare('PRAGMA table_info(walls)').all();
@@ -250,12 +292,35 @@ export function initDb() {
   if (!wallColumns.some((column) => column.name === 'folder_id')) {
     db.prepare('ALTER TABLE walls ADD COLUMN folder_id TEXT').run();
   }
+  if (!wallColumns.some((column) => column.name === 'image_uploads_enabled')) {
+    db.prepare('ALTER TABLE walls ADD COLUMN image_uploads_enabled INTEGER NOT NULL DEFAULT 1').run();
+  }
   db.prepare('CREATE INDEX IF NOT EXISTS idx_walls_folder ON walls(folder_id)').run();
 
   const postColumns = db.prepare('PRAGMA table_info(posts)').all();
   if (!postColumns.some((column) => column.name === 'template_answers')) {
     db.prepare("ALTER TABLE posts ADD COLUMN template_answers TEXT NOT NULL DEFAULT '{}'").run();
   }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS post_images (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      field_id TEXT,
+      stored_name TEXT NOT NULL UNIQUE,
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  const postImageColumns = db.prepare('PRAGMA table_info(post_images)').all();
+  if (!postImageColumns.some((column) => column.name === 'field_id')) {
+    db.prepare('ALTER TABLE post_images ADD COLUMN field_id TEXT').run();
+  }
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_post_images_post ON post_images(post_id)').run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_post_images_owner ON post_images(owner_id)').run();
 
   const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
   if (userCount === 0) {
