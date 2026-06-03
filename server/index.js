@@ -511,6 +511,10 @@ function exportDateText(value) {
   });
 }
 
+function exportPostSortValue(post, fallback) {
+  return Number.isFinite(Number(post.order)) ? Number(post.order) : fallback;
+}
+
 function renderWallExportHtml(wallData, posts, commentsByPost) {
   const templateFields =
     wallData.postMode === 'worksheet' && Array.isArray(wallData.postTemplate?.fields)
@@ -519,6 +523,23 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
   const columnNames = wallData.columnNames || {};
   const generatedAt = new Date().toLocaleString('ko-KR');
   const boardColor = exportWallBackground(wallData.backgroundTone);
+  const columnCount = Math.min(Math.max(Number(wallData.columnCount) || 4, 1), 5);
+  const columnNumbers = Array.from({ length: columnCount }, (_, index) => index + 1);
+  const postsByColumn = Object.fromEntries(columnNumbers.map((column) => [column, []]));
+  let fallbackIndex = 0;
+  for (const post of posts) {
+    const column = post.column && postsByColumn[post.column]
+      ? post.column
+      : columnNumbers[fallbackIndex++ % columnNumbers.length];
+    postsByColumn[column].push(post);
+  }
+  for (const column of columnNumbers) {
+    postsByColumn[column].sort((a, b) => {
+      const aOrder = exportPostSortValue(a, -new Date(a.createdAt || 0).getTime());
+      const bOrder = exportPostSortValue(b, -new Date(b.createdAt || 0).getTime());
+      return aOrder - bOrder;
+    });
+  }
   const renderPost = (post) => {
     const comments = commentsByPost.get(post.id) || [];
     const imagesByField = new Map(
@@ -598,30 +619,23 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
       </article>
     `;
   };
-  const postsHtml = posts
-    .map((post) => {
-      if (wallData.columnModeEnabled) return '';
-      return renderPost(post);
+  const columnHtml = columnNumbers
+    .map((column) => {
+      const columnPosts = postsByColumn[column] || [];
+      return `
+        <section class="wall-column">
+          ${
+            wallData.columnModeEnabled
+              ? `<h2>${escapeHtml(columnNames[column] || '컬럼명을 입력한 후 엔터')}</h2>`
+              : ''
+          }
+          <div class="column-posts">
+            ${columnPosts.map(renderPost).join('')}
+          </div>
+        </section>
+      `;
     })
     .join('');
-  const columnCount = wallData.columnModeEnabled
-    ? Math.min(Math.max(Number(wallData.columnCount) || 1, 1), 6)
-    : 1;
-  const columnHtml = wallData.columnModeEnabled
-    ? Array.from({ length: columnCount }, (_, index) => index + 1)
-        .map((column) => {
-          const columnPosts = posts.filter((post) => Number(post.column) === column);
-          return `
-            <section class="wall-column">
-              <h2>${escapeHtml(columnNames[column] || `${column}번 컬럼`)}</h2>
-              <div class="column-posts">
-                ${columnPosts.map(renderPost).join('') || '<p class="column-empty">게시글이 없습니다.</p>'}
-              </div>
-            </section>
-          `;
-        })
-        .join('')
-    : '';
 
   return `<!doctype html>
 <html lang="ko">
@@ -652,18 +666,9 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
     h1 { margin: 0; font-size: 38px; line-height: 1.18; letter-spacing: 0; }
     .description { margin: 10px 0 0; color: #57534e; white-space: pre-wrap; font-weight: 600; }
     .export-meta { margin-top: 12px; font-size: 14px; color: #6b6259; font-weight: 700; }
-    .posts-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(310px, 390px));
-      justify-content: start;
-      align-items: start;
-      gap: 28px;
-      width: min(100%, 1600px);
-      margin: 0 auto;
-    }
     .columns-grid {
       display: grid;
-      grid-template-columns: repeat(${columnCount}, minmax(310px, 1fr));
+      grid-template-columns: repeat(${columnCount}, minmax(0, 1fr));
       gap: 20px;
       width: min(100%, 1600px);
       margin: 0 auto;
@@ -787,9 +792,12 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
       font-weight: 700;
     }
     .column-empty { padding: 18px; }
-    @media (max-width: 820px) {
+    @media (max-width: 1279px) and (min-width: 768px) {
+      .columns-grid { grid-template-columns: repeat(${Math.min(columnCount, 2)}, minmax(0, 1fr)); }
+    }
+    @media (max-width: 767px) {
       h1 { font-size: 30px; }
-      .posts-grid, .columns-grid { grid-template-columns: 1fr; }
+      .columns-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -801,9 +809,9 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
   </header>
   <main>
     ${
-      wallData.columnModeEnabled
+      posts.length
         ? `<div class="columns-grid">${columnHtml}</div>`
-        : `<div class="posts-grid">${postsHtml || '<p class="empty">게시글이 없습니다.</p>'}</div>`
+        : '<p class="empty">게시글이 없습니다.</p>'
     }
   </main>
 </body>
