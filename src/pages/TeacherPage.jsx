@@ -1172,6 +1172,14 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
     await updateWall(wall.id, { folderId: folderId || null });
   }
 
+  async function removeWall(wall) {
+    const ok = window.confirm(
+      `${wall.title || '담벼락'} 담벼락과 모든 게시글을 되돌릴 수 없습니다.\n정말 삭제할까요?`
+    );
+    if (!ok) return;
+    await deleteWall(wall.id);
+  }
+
   return (
     <div className="space-y-5">
       {wallCreateOpen && (
@@ -1592,7 +1600,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                 </Link>
                 <button
                   type="button"
-                  onClick={() => deleteWall(wall.id)}
+                  onClick={() => removeWall(wall)}
                   className="inline-flex items-center gap-1 rounded-[8px] bg-white px-3 py-2 text-sm font-bold text-red-600"
                 >
                   <Trash2 size={15} />

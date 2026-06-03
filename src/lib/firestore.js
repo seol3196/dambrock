@@ -100,6 +100,29 @@ export async function exportWallCsv(wallId) {
   };
 }
 
+export async function exportWallHtml(wallId) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const response = await fetch(`/api/walls/${wallId}/export.html`, { headers });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const error = new Error(data.error || 'export-failed');
+    error.status = response.status;
+    error.code = data.error || String(response.status);
+    throw error;
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)/);
+  return {
+    blob,
+    filename: filenameMatch ? decodeURIComponent(filenameMatch[1]) : 'wall.html'
+  };
+}
+
 export function createPost(data) {
   const payload = {
     ...data,

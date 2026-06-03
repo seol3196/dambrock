@@ -118,6 +118,30 @@ function csvRow(values) {
   return values.map(csvCell).join(',');
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeFilename(value, fallback = 'wall') {
+  return String(value || fallback)
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80) || fallback;
+}
+
+function imageDataUrl(image) {
+  const filePath = storedPostImagePath(image.stored_name);
+  if (!fs.existsSync(filePath)) return '';
+  const base64 = fs.readFileSync(filePath).toString('base64');
+  return `data:${image.mime_type || 'application/octet-stream'};base64,${base64}`;
+}
+
 function normalizePostTemplate(value) {
   const fields = Array.isArray(value?.fields) ? value.fields : [];
   return {
@@ -450,6 +474,340 @@ function normalizeTemplateAnswers(template, value) {
     nextAnswers[field.id] = String(answers[field.id] || '').trim().slice(0, limit);
   }
   return nextAnswers;
+}
+
+function exportWallBackground(value) {
+  const colors = {
+    'bg-[#fff8e8]': '#e6d3ad',
+    'bg-[#edf7f2]': '#b8c9a3',
+    'bg-[#eef6ff]': '#a6bdd6',
+    'bg-[#f5efff]': '#b7a4cb',
+    'bg-[#fff0ea]': '#d8a684',
+    'bg-[#f3ead8]': '#c89c67'
+  };
+  return colors[value] || colors['bg-[#fff8e8]'];
+}
+
+function exportPostColor(value) {
+  const colors = {
+    'bg-yellow-100': '#fef9c3',
+    'bg-rose-100': '#ffe4e6',
+    'bg-sky-100': '#e0f2fe',
+    'bg-lime-100': '#ecfccb',
+    'bg-orange-100': '#ffedd5'
+  };
+  return colors[value] || colors['bg-yellow-100'];
+}
+
+function exportDateText(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('ko-KR', {
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function renderWallExportHtml(wallData, posts, commentsByPost) {
+  const templateFields =
+    wallData.postMode === 'worksheet' && Array.isArray(wallData.postTemplate?.fields)
+      ? wallData.postTemplate.fields
+      : [];
+  const columnNames = wallData.columnNames || {};
+  const generatedAt = new Date().toLocaleString('ko-KR');
+  const boardColor = exportWallBackground(wallData.backgroundTone);
+  const renderPost = (post) => {
+    const comments = commentsByPost.get(post.id) || [];
+    const imagesByField = new Map(
+      (post.images || [])
+        .filter((image) => image.fieldId)
+        .map((image) => [image.fieldId, image])
+    );
+    const freeImages = (post.images || []).filter((image) => !image.fieldId);
+    const likeCount = post.likeCount || 0;
+    const bodyHtml =
+      wallData.postMode === 'worksheet'
+        ? templateFields
+            .map((field) => {
+              const image = imagesByField.get(field.id);
+              const answer = post.templateAnswers?.[field.id] || '';
+              if (!image && !answer) return '';
+              return `
+                <section class="answer">
+                  <h3>${escapeHtml(field.label)}</h3>
+                  ${
+                    image
+                      ? `<img class="post-image" src="${image.dataUrl}" alt="${escapeHtml(image.originalName || field.label)}">`
+                      : `<p>${escapeHtml(answer).replace(/\n/g, '<br>')}</p>`
+                  }
+                </section>
+              `;
+            })
+            .join('')
+        : `
+            ${
+              String(post.content || '').trim()
+                ? `<p class="content">${escapeHtml(post.content).replace(/\n/g, '<br>')}</p>`
+                : ''
+            }
+            ${freeImages
+              .map(
+                (image) =>
+                  `<img class="post-image" src="${image.dataUrl}" alt="${escapeHtml(image.originalName || '첨부 사진')}">`
+              )
+              .join('')}
+          `;
+    return `
+      <article class="post" style="--post-color: ${exportPostColor(post.color)};">
+        <div class="post-toolbar">
+          <span class="drag-hint">⋮⋮ 드래그 이동</span>
+          <span class="owner-pill">내 글</span>
+        </div>
+        ${bodyHtml || '<p class="content empty-content">내용이 없습니다.</p>'}
+        <footer class="post-footer">
+          <span>${escapeHtml(post.authorName || '익명')}</span>
+          <span>${escapeHtml(exportDateText(post.createdAt))}</span>
+        </footer>
+        <div class="post-actions">
+          ${wallData.likesEnabled ? `<span class="action-pill">♡ ${escapeHtml(String(likeCount))}</span>` : ''}
+          ${wallData.commentsEnabled ? `<span class="action-pill">댓글 ${escapeHtml(String(comments.length))}</span>` : ''}
+        </div>
+        ${
+          comments.length
+            ? `<section class="comments">
+                <h3>댓글</h3>
+                ${comments
+                  .map(
+                    (comment) => `
+                      <div class="comment">
+                        <div class="comment-meta">
+                          <b>${escapeHtml(comment.authorName || '익명')}</b>
+                          <span>${escapeHtml(exportDateText(comment.createdAt))}</span>
+                        </div>
+                        <p>${escapeHtml(comment.text).replace(/\n/g, '<br>')}</p>
+                      </div>
+                    `
+                  )
+                  .join('')}
+              </section>`
+            : ''
+        }
+      </article>
+    `;
+  };
+  const postsHtml = posts
+    .map((post) => {
+      if (wallData.columnModeEnabled) return '';
+      return renderPost(post);
+    })
+    .join('');
+  const columnCount = wallData.columnModeEnabled
+    ? Math.min(Math.max(Number(wallData.columnCount) || 1, 1), 6)
+    : 1;
+  const columnHtml = wallData.columnModeEnabled
+    ? Array.from({ length: columnCount }, (_, index) => index + 1)
+        .map((column) => {
+          const columnPosts = posts.filter((post) => Number(post.column) === column);
+          return `
+            <section class="wall-column">
+              <h2>${escapeHtml(columnNames[column] || `${column}번 컬럼`)}</h2>
+              <div class="column-posts">
+                ${columnPosts.map(renderPost).join('') || '<p class="column-empty">게시글이 없습니다.</p>'}
+              </div>
+            </section>
+          `;
+        })
+        .join('')
+    : '';
+
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(wallData.title || '담벼락')}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: ${boardColor};
+      color: #1c1917;
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      line-height: 1.55;
+    }
+    header {
+      padding: 30px clamp(20px, 5vw, 84px) 24px;
+      background: rgba(255, 250, 240, 0.74);
+      border-bottom: 1px solid rgba(28, 25, 23, 0.12);
+    }
+    main {
+      min-height: calc(100vh - 136px);
+      padding: 34px clamp(18px, 5vw, 84px);
+      background-image: radial-gradient(rgba(120, 113, 108, 0.28) 1.1px, transparent 1.1px);
+      background-size: 24px 24px;
+    }
+    h1 { margin: 0; font-size: 38px; line-height: 1.18; letter-spacing: 0; }
+    .description { margin: 10px 0 0; color: #57534e; white-space: pre-wrap; font-weight: 600; }
+    .export-meta { margin-top: 12px; font-size: 14px; color: #6b6259; font-weight: 700; }
+    .posts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 390px));
+      justify-content: start;
+      align-items: start;
+      gap: 28px;
+      width: min(100%, 1600px);
+      margin: 0 auto;
+    }
+    .columns-grid {
+      display: grid;
+      grid-template-columns: repeat(${columnCount}, minmax(310px, 1fr));
+      gap: 20px;
+      width: min(100%, 1600px);
+      margin: 0 auto;
+    }
+    .wall-column {
+      min-height: 300px;
+      border-radius: 16px;
+      padding: 12px;
+    }
+    .wall-column h2 {
+      margin: 0 0 16px;
+      min-height: 48px;
+      border: 1px solid rgba(255, 255, 255, 0.75);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.68);
+      padding: 10px 12px;
+      text-align: center;
+      font-size: 24px;
+      line-height: 1.2;
+      box-shadow: 0 2px 10px rgba(28, 25, 23, 0.06);
+    }
+    .column-posts { display: grid; gap: 16px; }
+    .post {
+      width: 100%;
+      border: 1px solid rgba(28, 25, 23, 0.08);
+      border-radius: 10px;
+      background: var(--post-color);
+      padding: 16px;
+      box-shadow: 0 2px 5px rgba(28, 25, 23, 0.14), 0 12px 24px rgba(28, 25, 23, 0.08);
+      page-break-inside: avoid;
+    }
+    .post-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 30px;
+      margin-bottom: 12px;
+    }
+    .drag-hint {
+      color: #9a9288;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .owner-pill {
+      border: 1px solid #99f6e4;
+      border-radius: 999px;
+      background: #f0fdfa;
+      padding: 5px 10px;
+      color: #0f766e;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .post-footer, .comment-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: #57534e;
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .post-footer {
+      margin-top: 18px;
+      border-bottom: 1px solid rgba(28, 25, 23, 0.1);
+      padding-bottom: 12px;
+    }
+    .content {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 17px;
+      font-weight: 650;
+      line-height: 1.7;
+    }
+    .empty-content { color: #78716c; }
+    .answer { margin-top: 12px; border-radius: 8px; background: rgba(255, 255, 255, 0.45); padding: 10px 12px; }
+    .answer:first-of-type { margin-top: 0; }
+    .answer h3, .comments h3 { margin: 0 0 8px; font-size: 13px; color: #70675f; font-weight: 900; }
+    .answer p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; font-weight: 650; line-height: 1.7; }
+    .post-image {
+      display: block;
+      width: 100%;
+      max-height: 420px;
+      margin-top: 10px;
+      border-radius: 10px;
+      object-fit: contain;
+      background: rgba(255, 255, 255, 0.55);
+      border: 1px solid rgba(28, 25, 23, 0.1);
+    }
+    .content + .post-image { margin-top: 16px; }
+    .post-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .action-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.75);
+      padding: 6px 12px;
+      color: #44403c;
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .comments {
+      margin-top: 16px;
+      border-top: 1px solid rgba(28, 25, 23, 0.12);
+      padding-top: 12px;
+    }
+    .comment { margin-top: 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.55); padding: 10px; }
+    .comment p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .empty, .column-empty {
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.55);
+      padding: 40px;
+      color: #57534e;
+      text-align: center;
+      font-weight: 700;
+    }
+    .column-empty { padding: 18px; }
+    @media (max-width: 820px) {
+      h1 { font-size: 30px; }
+      .posts-grid, .columns-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>${escapeHtml(wallData.title || '담벼락')}</h1>
+    ${wallData.description ? `<p class="description">${escapeHtml(wallData.description)}</p>` : ''}
+    <p class="export-meta">${escapeHtml(wallData.ownerName || '')} 선생님 · 게시글 ${posts.length}개 · 내보낸 시간 ${escapeHtml(generatedAt)}</p>
+  </header>
+  <main>
+    ${
+      wallData.columnModeEnabled
+        ? `<div class="columns-grid">${columnHtml}</div>`
+        : `<div class="posts-grid">${postsHtml || '<p class="empty">게시글이 없습니다.</p>'}</div>`
+    }
+  </main>
+</body>
+</html>`;
 }
 
 function validateWorksheetImages(template, imageFiles) {
@@ -891,6 +1249,52 @@ app.get('/api/walls/:id/export.csv', requireUser, requireRole('teacher'), (req, 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
   return res.send(csv);
+});
+
+app.get('/api/walls/:id/export.html', requireUser, requireRole('teacher'), (req, res) => {
+  const wall = db.prepare('SELECT * FROM walls WHERE id = ?').get(req.params.id);
+  if (!wall) return res.status(404).json({ error: 'not-found' });
+  if (wall.owner_id !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
+
+  const wallData = toWall(wall);
+  const commentsByPost = new Map();
+  const comments = db
+    .prepare(
+      `SELECT comments.*
+       FROM comments
+       JOIN posts ON posts.id = comments.post_id
+       WHERE posts.wall_id = ?
+       ORDER BY comments.created_at ASC`
+    )
+    .all(wall.id)
+    .map(toComment);
+  for (const comment of comments) {
+    const list = commentsByPost.get(comment.postId) || [];
+    list.push(comment);
+    commentsByPost.set(comment.postId, list);
+  }
+
+  const posts = db
+    .prepare('SELECT * FROM posts WHERE wall_id = ? ORDER BY column_no ASC, order_no ASC, created_at ASC')
+    .all(wall.id)
+    .map((row) => {
+      const post = toPost(row);
+      const images = db
+        .prepare('SELECT * FROM post_images WHERE post_id = ? ORDER BY created_at ASC')
+        .all(post.id)
+        .map((image) => ({
+          ...toPostImage(image),
+          dataUrl: imageDataUrl(image)
+        }))
+        .filter((image) => image.dataUrl);
+      return { ...post, images };
+    });
+
+  const html = renderWallExportHtml(wallData, posts, commentsByPost);
+  const filename = encodeURIComponent(`${safeFilename(wallData.title || wall.id)}-wall.html`);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
+  return res.send(html);
 });
 
 app.delete('/api/walls/:id', requireUser, requireRole('teacher'), (req, res) => {

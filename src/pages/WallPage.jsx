@@ -21,6 +21,7 @@ import {
   createPost,
   deleteWallColumn,
   exportWallCsv,
+  exportWallHtml,
   subscribePosts,
   subscribeWall,
   updatePostLayouts,
@@ -805,6 +806,22 @@ export default function WallPage() {
     }
   }
 
+  async function downloadHtml() {
+    try {
+      const { blob, filename } = await exportWallHtml(wallId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('HTML 파일을 내보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    }
+  }
+
   function closeActions() {
     setActionsOpen(false);
   }
@@ -888,6 +905,17 @@ export default function WallPage() {
                     type="button"
                     onClick={() => {
                       closeActions();
+                      downloadHtml();
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-3 text-left text-sm font-bold text-stone-800 hover:bg-stone-50"
+                  >
+                    <Download size={15} />
+                    HTML
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeActions();
                       setSettingsOpen(true);
                     }}
                     className="flex w-full items-center gap-2 px-3 py-3 text-left text-sm font-bold text-stone-800 hover:bg-stone-50"
@@ -916,6 +944,14 @@ export default function WallPage() {
               >
                 <Download size={16} />
                 CSV
+              </button>
+              <button
+                type="button"
+                onClick={downloadHtml}
+                className="inline-flex items-center gap-2 rounded-[10px] border border-stone-300 bg-white px-4 py-2 text-sm font-bold text-stone-800 shadow-sm"
+              >
+                <Download size={16} />
+                HTML
               </button>
               <button
                 type="button"
