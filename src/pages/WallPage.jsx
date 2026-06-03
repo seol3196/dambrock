@@ -163,6 +163,8 @@ export default function WallPage() {
   const [shareOpen, setShareOpen] = useState(false);
   const [qrPreviewOpen, setQrPreviewOpen] = useState(false);
   const [shareMessage, setShareMessage] = useState('');
+  const [htmlExportOpen, setHtmlExportOpen] = useState(false);
+  const [htmlExporting, setHtmlExporting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [editingPost, setEditingPost] = useState(null);
@@ -806,9 +808,10 @@ export default function WallPage() {
     }
   }
 
-  async function downloadHtml() {
+  async function downloadHtml(includeAuthorNames) {
+    setHtmlExporting(true);
     try {
-      const { blob, filename } = await exportWallHtml(wallId);
+      const { blob, filename } = await exportWallHtml(wallId, { includeAuthorNames });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -817,9 +820,16 @@ export default function WallPage() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      setHtmlExportOpen(false);
     } catch {
       alert('HTML 파일을 내보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setHtmlExporting(false);
     }
+  }
+
+  function openHtmlExportModal() {
+    setHtmlExportOpen(true);
   }
 
   function closeActions() {
@@ -905,7 +915,7 @@ export default function WallPage() {
                     type="button"
                     onClick={() => {
                       closeActions();
-                      downloadHtml();
+                      openHtmlExportModal();
                     }}
                     className="flex w-full items-center gap-2 px-3 py-3 text-left text-sm font-bold text-stone-800 hover:bg-stone-50"
                   >
@@ -947,7 +957,7 @@ export default function WallPage() {
               </button>
               <button
                 type="button"
-                onClick={downloadHtml}
+                onClick={openHtmlExportModal}
                 className="inline-flex items-center gap-2 rounded-[10px] border border-stone-300 bg-white px-4 py-2 text-sm font-bold text-stone-800 shadow-sm"
               >
                 <Download size={16} />
@@ -1116,6 +1126,49 @@ export default function WallPage() {
         >
           <Plus size={30} />
         </button>
+      )}
+
+      {htmlExportOpen && (
+        <div className="fixed inset-0 z-30 grid place-items-center bg-stone-950/45 px-4">
+          <section className="w-full max-w-sm rounded-[18px] bg-white p-5 text-stone-950 shadow-soft">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold">HTML로 저장</h2>
+                <p className="mt-2 text-sm leading-6 text-stone-600">
+                  저장할 HTML 파일에 학생 이름을 포함할지 선택해 주세요.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!htmlExporting) setHtmlExportOpen(false);
+                }}
+                className="rounded-full p-2 text-stone-500 hover:bg-stone-100 hover:text-stone-900"
+                aria-label="HTML 저장 닫기"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-2">
+              <button
+                type="button"
+                disabled={htmlExporting}
+                onClick={() => downloadHtml(true)}
+                className="rounded-[10px] bg-stone-900 px-4 py-3 text-sm font-bold text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                포함하기
+              </button>
+              <button
+                type="button"
+                disabled={htmlExporting}
+                onClick={() => downloadHtml(false)}
+                className="rounded-[10px] border border-stone-300 px-4 py-3 text-sm font-bold text-stone-800 transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                포함하지 않기
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {settingsOpen && canManageWall && settingsForm && (

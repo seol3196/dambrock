@@ -515,7 +515,8 @@ function exportPostSortValue(post, fallback) {
   return Number.isFinite(Number(post.order)) ? Number(post.order) : fallback;
 }
 
-function renderWallExportHtml(wallData, posts, commentsByPost) {
+function renderWallExportHtml(wallData, posts, commentsByPost, options = {}) {
+  const includeAuthorNames = options.includeAuthorNames !== false;
   const templateFields =
     wallData.postMode === 'worksheet' && Array.isArray(wallData.postTemplate?.fields)
       ? wallData.postTemplate.fields
@@ -540,6 +541,10 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
       return aOrder - bOrder;
     });
   }
+  const authorLabel = (item) => {
+    if (includeAuthorNames) return item.authorName || '익명';
+    return item.authorId === wallData.ownerId ? '선생님' : '비공개';
+  };
   const renderPost = (post) => {
     const comments = commentsByPost.get(post.id) || [];
     const imagesByField = new Map(
@@ -561,7 +566,7 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
                   <h3>${escapeHtml(field.label)}</h3>
                   ${
                     image
-                      ? `<img class="post-image" src="${image.dataUrl}" alt="${escapeHtml(image.originalName || field.label)}">`
+                      ? `<img class="post-image" src="${image.dataUrl}" alt="${escapeHtml(image.originalName || field.label)}" data-full-image="true">`
                       : `<p>${escapeHtml(answer).replace(/\n/g, '<br>')}</p>`
                   }
                 </section>
@@ -577,19 +582,15 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
             ${freeImages
               .map(
                 (image) =>
-                  `<img class="post-image" src="${image.dataUrl}" alt="${escapeHtml(image.originalName || '첨부 사진')}">`
+                  `<img class="post-image" src="${image.dataUrl}" alt="${escapeHtml(image.originalName || '첨부 사진')}" data-full-image="true">`
               )
               .join('')}
           `;
     return `
       <article class="post" style="--post-color: ${exportPostColor(post.color)};">
-        <div class="post-toolbar">
-          <span class="drag-hint">⋮⋮ 드래그 이동</span>
-          <span class="owner-pill">내 글</span>
-        </div>
         ${bodyHtml || '<p class="content empty-content">내용이 없습니다.</p>'}
         <footer class="post-footer">
-          <span>${escapeHtml(post.authorName || '익명')}</span>
+          <span>${escapeHtml(authorLabel(post))}</span>
           <span>${escapeHtml(exportDateText(post.createdAt))}</span>
         </footer>
         <div class="post-actions">
@@ -605,7 +606,7 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
                     (comment) => `
                       <div class="comment">
                         <div class="comment-meta">
-                          <b>${escapeHtml(comment.authorName || '익명')}</b>
+                          <b>${escapeHtml(authorLabel(comment))}</b>
                           <span>${escapeHtml(exportDateText(comment.createdAt))}</span>
                         </div>
                         <p>${escapeHtml(comment.text).replace(/\n/g, '<br>')}</p>
@@ -625,8 +626,8 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
       return `
         <section class="wall-column">
           ${
-            wallData.columnModeEnabled
-              ? `<h2>${escapeHtml(columnNames[column] || '컬럼명을 입력한 후 엔터')}</h2>`
+            wallData.columnModeEnabled && String(columnNames[column] || '').trim()
+              ? `<h2>${escapeHtml(columnNames[column])}</h2>`
               : ''
           }
           <div class="column-posts">
@@ -700,28 +701,6 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
       box-shadow: 0 2px 5px rgba(28, 25, 23, 0.14), 0 12px 24px rgba(28, 25, 23, 0.08);
       page-break-inside: avoid;
     }
-    .post-toolbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      min-height: 30px;
-      margin-bottom: 12px;
-    }
-    .drag-hint {
-      color: #9a9288;
-      font-size: 13px;
-      font-weight: 800;
-    }
-    .owner-pill {
-      border: 1px solid #99f6e4;
-      border-radius: 999px;
-      background: #f0fdfa;
-      padding: 5px 10px;
-      color: #0f766e;
-      font-size: 12px;
-      font-weight: 900;
-    }
     .post-footer, .comment-meta {
       display: flex;
       justify-content: space-between;
@@ -752,11 +731,12 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
       display: block;
       width: 100%;
       max-height: 420px;
-      margin-top: 10px;
+      margin-top: 0;
       border-radius: 10px;
       object-fit: contain;
       background: rgba(255, 255, 255, 0.55);
       border: 1px solid rgba(28, 25, 23, 0.1);
+      cursor: zoom-in;
     }
     .content + .post-image { margin-top: 16px; }
     .post-actions {
@@ -792,6 +772,38 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
       font-weight: 700;
     }
     .column-empty { padding: 18px; }
+    .image-lightbox {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 28px;
+      background: rgba(28, 25, 23, 0.86);
+    }
+    .image-lightbox.open { display: flex; }
+    .image-lightbox img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+    }
+    .image-lightbox button {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      border: 0;
+      border-radius: 999px;
+      background: #fff;
+      color: #1c1917;
+      padding: 10px 14px;
+      font-size: 16px;
+      font-weight: 900;
+      cursor: pointer;
+    }
     @media (max-width: 1279px) and (min-width: 768px) {
       .columns-grid { grid-template-columns: repeat(${Math.min(columnCount, 2)}, minmax(0, 1fr)); }
     }
@@ -814,6 +826,40 @@ function renderWallExportHtml(wallData, posts, commentsByPost) {
         : '<p class="empty">게시글이 없습니다.</p>'
     }
   </main>
+  <div class="image-lightbox" id="image-lightbox" aria-hidden="true">
+    <button type="button" id="image-lightbox-close" aria-label="닫기">닫기</button>
+    <img alt="">
+  </div>
+  <script>
+    (() => {
+      const lightbox = document.getElementById('image-lightbox');
+      const lightboxImage = lightbox?.querySelector('img');
+      const closeButton = document.getElementById('image-lightbox-close');
+      const close = () => {
+        if (!lightbox || !lightboxImage) return;
+        lightbox.classList.remove('open');
+        lightbox.setAttribute('aria-hidden', 'true');
+        lightboxImage.removeAttribute('src');
+        lightboxImage.removeAttribute('alt');
+      };
+      document.querySelectorAll('[data-full-image="true"]').forEach((image) => {
+        image.addEventListener('click', () => {
+          if (!lightbox || !lightboxImage) return;
+          lightboxImage.src = image.src;
+          lightboxImage.alt = image.alt || '첨부 사진';
+          lightbox.classList.add('open');
+          lightbox.setAttribute('aria-hidden', 'false');
+        });
+      });
+      closeButton?.addEventListener('click', close);
+      lightbox?.addEventListener('click', (event) => {
+        if (event.target === lightbox) close();
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') close();
+      });
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -1298,7 +1344,8 @@ app.get('/api/walls/:id/export.html', requireUser, requireRole('teacher'), (req,
       return { ...post, images };
     });
 
-  const html = renderWallExportHtml(wallData, posts, commentsByPost);
+  const includeAuthorNames = req.query.includeAuthorNames !== 'false';
+  const html = renderWallExportHtml(wallData, posts, commentsByPost, { includeAuthorNames });
   const filename = encodeURIComponent(`${safeFilename(wallData.title || wall.id)}-wall.html`);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);

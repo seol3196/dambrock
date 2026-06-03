@@ -100,12 +100,17 @@ export async function exportWallCsv(wallId) {
   };
 }
 
-export async function exportWallHtml(wallId) {
+export async function exportWallHtml(wallId, options = {}) {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`/api/walls/${wallId}/export.html`, { headers });
+  const params = new URLSearchParams();
+  if (options.includeAuthorNames === false) {
+    params.set('includeAuthorNames', 'false');
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/walls/${wallId}/export.html${query ? `?${query}` : ''}`, { headers });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     const error = new Error(data.error || 'export-failed');
