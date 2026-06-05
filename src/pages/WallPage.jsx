@@ -23,6 +23,7 @@ import {
   exportWallCsv,
   exportWallHtml,
   subscribePosts,
+  subscribeStudentClasses,
   subscribeWall,
   updatePostLayouts,
   updatePost,
@@ -189,6 +190,8 @@ export default function WallPage() {
   const [activeImageFieldId, setActiveImageFieldId] = useState(null);
   const [postError, setPostError] = useState('');
   const [settingsForm, setSettingsForm] = useState(null);
+  const [settingsVisibilityMode, setSettingsVisibilityMode] = useState('all');
+  const [studentClasses, setStudentClasses] = useState([]);
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
   const shareUrl = `${origin}/wall/${wallId}`;
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -250,6 +253,14 @@ export default function WallPage() {
   }, []);
 
   useEffect(() => {
+    if (!canManageWall || !wall?.ownerId) {
+      setStudentClasses([]);
+      return undefined;
+    }
+    return subscribeStudentClasses({ ownerId: wall.ownerId }, setStudentClasses);
+  }, [canManageWall, wall?.ownerId]);
+
+  useEffect(() => {
     if (loading) return undefined;
 
     const unsubscribe = subscribeWall(
@@ -268,6 +279,13 @@ export default function WallPage() {
             };
           });
           if (!settingsOpen) {
+            setSettingsVisibilityMode(
+              nextWall.visibleToStudents === false
+                ? 'hidden'
+                : Array.isArray(nextWall.visibleClassIds) && nextWall.visibleClassIds.length
+                  ? 'classes'
+                  : 'all'
+            );
             setSettingsForm({
               title: nextWall.title || '',
               description: nextWall.description || '',
@@ -276,6 +294,7 @@ export default function WallPage() {
               likesEnabled: nextWall.likesEnabled ?? true,
               showAuthorNames: nextWall.showAuthorNames ?? true,
               visibleToStudents: nextWall.visibleToStudents ?? true,
+              visibleClassIds: Array.isArray(nextWall.visibleClassIds) ? nextWall.visibleClassIds : [],
               publicViewEnabled: nextWall.publicViewEnabled ?? false,
               columnModeEnabled: nextWall.columnModeEnabled ?? false,
               imageUploadsEnabled: nextWall.imageUploadsEnabled ?? true,
@@ -635,9 +654,43 @@ export default function WallPage() {
     }
   }
 
+  function setStudentDashboardVisibilityMode(mode) {
+    if (!settingsForm) return;
+    setSettingsVisibilityMode(mode);
+    if (mode === 'hidden') {
+      setSettingsForm({ ...settingsForm, visibleToStudents: false });
+      return;
+    }
+    if (mode === 'all') {
+      setSettingsForm({ ...settingsForm, visibleToStudents: true, visibleClassIds: [] });
+      return;
+    }
+    setSettingsForm({ ...settingsForm, visibleToStudents: true });
+  }
+
+  function toggleVisibleClass(classId) {
+    if (!settingsForm) return;
+    const current = Array.isArray(settingsForm.visibleClassIds) ? settingsForm.visibleClassIds : [];
+    const next = current.includes(classId)
+      ? current.filter((item) => item !== classId)
+      : [...current, classId];
+    setSettingsForm({ ...settingsForm, visibleToStudents: true, visibleClassIds: next });
+  }
+
   async function saveSettings() {
     if (!settingsForm) return;
-    await updateWall(wallId, settingsForm);
+    const visibleClassIds = Array.isArray(settingsForm.visibleClassIds)
+      ? settingsForm.visibleClassIds
+      : [];
+    if (settingsVisibilityMode === 'classes' && !visibleClassIds.length) {
+      alert('공개할 클래스를 하나 이상 선택해 주세요.');
+      return;
+    }
+    await updateWall(wallId, {
+      ...settingsForm,
+      visibleToStudents: settingsVisibilityMode !== 'hidden',
+      visibleClassIds: settingsVisibilityMode === 'classes' ? visibleClassIds : []
+    });
     setSettingsOpen(false);
   }
 
@@ -1238,20 +1291,74 @@ export default function WallPage() {
                       className="h-4 w-4 shrink-0 accent-stone-900"
                     />
                   </label>
-                  <label className="flex items-center justify-between gap-4 py-3">
-                    <span>
-                      <b className="block text-sm text-stone-900">학생 홈페이지에 이 담벼락을 공개</b>
-                      <span className="text-xs text-stone-500">학생 목록에서만 숨김</span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={settingsForm.visibleToStudents}
-                      onChange={(e) =>
-                        setSettingsForm({ ...settingsForm, visibleToStudents: e.target.checked })
-                      }
-                      className="h-4 w-4 shrink-0 accent-stone-900"
-                    />
-                  </label>
+                  <div className="py-3">
+                    <div>
+                      <b className="block text-sm text-stone-900">학생 홈페이지 공개</b>
+                      <span className="text-xs text-stone-500">
+                        학생 대시보드에 이 담벼락을 표시할 대상을 정합니다.
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                      {[
+                        ['hidden', '비공개', '학생 목록에서 숨김'],
+                        ['all', '전체 학생', '모든 학생에게 표시'],
+                        ['classes', '특정 클래스', '선택한 클래스만 표시']
+                      ].map(([value, label, description]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setStudentDashboardVisibilityMode(value)}
+                          className={`rounded-[8px] border px-3 py-2 text-left ${
+                            settingsVisibilityMode === value
+                              ? 'border-stone-900 bg-stone-900 text-white'
+                              : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300'
+                          }`}
+                        >
+                          <span className="block text-sm font-bold">{label}</span>
+                          <span
+                            className={`mt-0.5 block text-xs ${
+                              settingsVisibilityMode === value
+                                ? 'text-white/70'
+                                : 'text-stone-500'
+                            }`}
+                          >
+                            {description}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    {settingsVisibilityMode === 'classes' && (
+                      <div className="mt-3 rounded-[8px] border border-stone-200 bg-stone-50 p-3">
+                        {studentClasses.length ? (
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {studentClasses.map((studentClass) => {
+                              const checked = (settingsForm.visibleClassIds || []).includes(
+                                studentClass.id
+                              );
+                              return (
+                                <label
+                                  key={studentClass.id}
+                                  className="flex items-center justify-between gap-3 rounded-[8px] bg-white px-3 py-2 text-sm font-bold text-stone-800"
+                                >
+                                  <span className="min-w-0 truncate">{studentClass.name}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => toggleVisibleClass(studentClass.id)}
+                                    className="h-4 w-4 shrink-0 accent-stone-900"
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-stone-500">
+                            아직 클래스가 없습니다. 교사 대시보드의 학생 관리에서 클래스를 먼저 만들어 주세요.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <label className="flex items-center justify-between gap-4 py-3">
                     <span>
                       <b className="block text-sm text-stone-900">포스트잇에 작성자 이름표시</b>

@@ -216,6 +216,31 @@ function normalizeStudentClassId(value, ownerId) {
   return studentClass.id;
 }
 
+function normalizeVisibleClassIds(value, ownerId) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    const error = new Error('invalid-visible-classes');
+    error.status = 400;
+    throw error;
+  }
+  const classIds = [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))];
+  if (!classIds.length) return [];
+  const placeholders = classIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT id FROM student_classes
+       WHERE owner_id = ? AND id IN (${placeholders})`
+    )
+    .all(ownerId, ...classIds);
+  const validIds = new Set(rows.map((row) => row.id));
+  if (classIds.some((classId) => !validIds.has(classId))) {
+    const error = new Error('student-class-not-found');
+    error.status = 400;
+    throw error;
+  }
+  return classIds;
+}
+
 function normalizeHtmlTitle(value) {
   return String(value || '').trim().slice(0, 80) || 'HTML 사이트';
 }
@@ -1185,6 +1210,21 @@ app.delete('/api/student-classes/:id', requireUser, requireRole('teacher'), (req
       now(),
       studentClass.id
     );
+    const walls = db
+      .prepare('SELECT id, visible_class_ids FROM walls WHERE owner_id = ?')
+      .all(req.user.uid);
+    const updateWallVisibility = db.prepare(
+      'UPDATE walls SET visible_class_ids = ?, updated_at = ? WHERE id = ?'
+    );
+    for (const wall of walls) {
+      const classIds = JSON.parse(wall.visible_class_ids || '[]');
+      if (!Array.isArray(classIds) || !classIds.includes(studentClass.id)) continue;
+      updateWallVisibility.run(
+        JSON.stringify(classIds.filter((classId) => classId !== studentClass.id)),
+        now(),
+        wall.id
+      );
+    }
     db.prepare('DELETE FROM student_classes WHERE id = ?').run(studentClass.id);
   })();
   res.json({ ok: true });
@@ -1279,12 +1319,13 @@ app.post('/api/walls', requireUser, requireRole('teacher'), (req, res) => {
   if (!canUseFolder(folderId, req.user.uid)) {
     return res.status(400).json({ error: 'invalid-folder' });
   }
+  const visibleClassIds = normalizeVisibleClassIds(req.body.visibleClassIds, req.user.uid);
   db.prepare(
     `INSERT INTO walls
      (id, title, description, access_mode, comments_enabled, likes_enabled, owner_id, owner_name,
-      show_author_names, visible_to_students, public_view_enabled, folder_id, post_mode, post_template, background_tone,
+      show_author_names, visible_to_students, visible_class_ids, public_view_enabled, folder_id, post_mode, post_template, background_tone,
       image_uploads_enabled, column_mode_enabled, column_count, column_names, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     wallId,
     String(req.body.title || '').trim(),
@@ -1296,6 +1337,7 @@ app.post('/api/walls', requireUser, requireRole('teacher'), (req, res) => {
     String(req.body.ownerName || req.user.display_name || req.user.login_id),
     req.body.showAuthorNames === false ? 0 : 1,
     req.body.visibleToStudents === false ? 0 : 1,
+    JSON.stringify(visibleClassIds),
     req.body.publicViewEnabled === true ? 1 : 0,
     folderId,
     postMode,
@@ -1335,6 +1377,10 @@ app.patch('/api/walls/:id', requireUser, requireRole('teacher'), (req, res) => {
     req.body.postTemplate == null
       ? null
       : JSON.stringify(nextPostMode === 'free' ? { fields: [] } : normalizePostTemplate(req.body.postTemplate));
+  const nextVisibleClassIds =
+    req.body.visibleClassIds === undefined
+      ? undefined
+      : normalizeVisibleClassIds(req.body.visibleClassIds, req.user.uid);
   db.prepare(
     `UPDATE walls SET
       title = COALESCE(?, title),
@@ -1344,6 +1390,7 @@ app.patch('/api/walls/:id', requireUser, requireRole('teacher'), (req, res) => {
       likes_enabled = COALESCE(?, likes_enabled),
       show_author_names = COALESCE(?, show_author_names),
       visible_to_students = COALESCE(?, visible_to_students),
+      visible_class_ids = COALESCE(?, visible_class_ids),
       public_view_enabled = COALESCE(?, public_view_enabled),
       folder_id = ?,
       post_mode = COALESCE(?, post_mode),
@@ -1363,6 +1410,7 @@ app.patch('/api/walls/:id', requireUser, requireRole('teacher'), (req, res) => {
     req.body.likesEnabled == null ? null : req.body.likesEnabled ? 1 : 0,
     req.body.showAuthorNames == null ? null : req.body.showAuthorNames ? 1 : 0,
     req.body.visibleToStudents == null ? null : req.body.visibleToStudents ? 1 : 0,
+    nextVisibleClassIds === undefined ? null : JSON.stringify(nextVisibleClassIds),
     req.body.publicViewEnabled == null ? null : req.body.publicViewEnabled ? 1 : 0,
     nextFolderId === undefined ? wall.folder_id : nextFolderId,
     nextPostMode,

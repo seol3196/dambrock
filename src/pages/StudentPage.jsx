@@ -18,12 +18,19 @@ export default function StudentPage() {
     return subscribeWalls({ ownerId: profile.teacherId }, setWalls);
   }, [profile?.teacherId]);
 
+  function canSeeWall(wall) {
+    if (wall.visibleToStudents === false) return false;
+    const visibleClassIds = Array.isArray(wall.visibleClassIds) ? wall.visibleClassIds : [];
+    if (!visibleClassIds.length) return true;
+    return Boolean(profile?.classId && visibleClassIds.includes(profile.classId));
+  }
+
   const sortedWalls = useMemo(
     () =>
       [...walls]
-        .filter((wall) => wall.visibleToStudents !== false)
+        .filter(canSeeWall)
         .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)),
-    [walls]
+    [profile?.classId, walls]
   );
 
   return (

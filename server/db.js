@@ -72,6 +72,7 @@ export function toWall(row) {
     likesEnabled: Boolean(row.likes_enabled),
     showAuthorNames: row.show_author_names == null ? true : Boolean(row.show_author_names),
     visibleToStudents: row.visible_to_students == null ? true : Boolean(row.visible_to_students),
+    visibleClassIds: json(row.visible_class_ids, []),
     publicViewEnabled: row.public_view_enabled == null ? false : Boolean(row.public_view_enabled),
     folderId: row.folder_id || null,
     postMode: row.post_mode || 'free',
@@ -193,6 +194,7 @@ export function initDb() {
       likes_enabled INTEGER NOT NULL DEFAULT 1,
       show_author_names INTEGER NOT NULL DEFAULT 1,
       visible_to_students INTEGER NOT NULL DEFAULT 1,
+      visible_class_ids TEXT NOT NULL DEFAULT '[]',
       public_view_enabled INTEGER NOT NULL DEFAULT 0,
       folder_id TEXT,
       post_mode TEXT NOT NULL DEFAULT 'free',
@@ -313,6 +315,9 @@ export function initDb() {
   }
   if (!wallColumns.some((column) => column.name === 'visible_to_students')) {
     db.prepare('ALTER TABLE walls ADD COLUMN visible_to_students INTEGER NOT NULL DEFAULT 1').run();
+  }
+  if (!wallColumns.some((column) => column.name === 'visible_class_ids')) {
+    db.prepare("ALTER TABLE walls ADD COLUMN visible_class_ids TEXT NOT NULL DEFAULT '[]'").run();
   }
   if (!wallColumns.some((column) => column.name === 'column_mode_enabled')) {
     db.prepare('ALTER TABLE walls ADD COLUMN column_mode_enabled INTEGER NOT NULL DEFAULT 0').run();

@@ -117,6 +117,7 @@ export default function TeacherPage() {
     likesEnabled: true,
     showAuthorNames: true,
     visibleToStudents: true,
+    visibleClassIds: [],
     publicViewEnabled: false,
     folderId: null,
     columnModeEnabled: false,
@@ -354,6 +355,7 @@ export default function TeacherPage() {
       likesEnabled: true,
       showAuthorNames: true,
       visibleToStudents: true,
+      visibleClassIds: [],
       publicViewEnabled: false,
       folderId: null,
       columnModeEnabled: false,
@@ -397,6 +399,7 @@ export default function TeacherPage() {
           submit={submitWall}
           walls={walls}
           folders={folders}
+          studentClasses={studentClasses}
           origin={origin}
         />
       )}
@@ -1492,7 +1495,7 @@ function HtmlHostingManager({ sites, origin }) {
   );
 }
 
-function WallManager({ form, setForm, submit, walls, folders, origin }) {
+function WallManager({ form, setForm, submit, walls, folders, studentClasses, origin }) {
   const navigate = useNavigate();
   const [questionEditorOpen, setQuestionEditorOpen] = useState(false);
   const [wallCreateOpen, setWallCreateOpen] = useState(false);
@@ -1510,6 +1513,10 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
   const folderById = useMemo(
     () => Object.fromEntries(folders.map((folder) => [folder.id, folder])),
     [folders]
+  );
+  const studentClassById = useMemo(
+    () => Object.fromEntries(studentClasses.map((studentClass) => [studentClass.id, studentClass])),
+    [studentClasses]
   );
   const sortedWalls = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase('ko-KR');
@@ -1619,6 +1626,17 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
     await updateWall(wall.id, {
       visibleToStudents: wall.visibleToStudents === false
     });
+  }
+
+  function studentVisibilityText(wall) {
+    if (wall.visibleToStudents === false) return '비공개';
+    const classIds = Array.isArray(wall.visibleClassIds) ? wall.visibleClassIds : [];
+    if (!classIds.length) return '전체 학생';
+    const names = classIds
+      .map((classId) => studentClassById[classId]?.name)
+      .filter(Boolean);
+    if (!names.length) return '특정 클래스';
+    return names.length > 2 ? `${names.slice(0, 2).join(', ')} 외 ${names.length - 2}개` : names.join(', ');
   }
 
   function openFolderModal(folder = null) {
@@ -2112,9 +2130,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                         <label className="flex items-center justify-between gap-3 rounded-[10px] bg-stone-50 px-3 py-2">
                           <span>
                             <b className="block text-sm text-stone-800">학생 홈페이지 공개</b>
-                            <span className="text-xs text-stone-500">
-                              끄면 학생 목록에서는 숨깁니다.
-                            </span>
+                            <span className="text-xs text-stone-500">대상: {studentVisibilityText(wall)}</span>
                           </span>
                           <input
                             type="checkbox"
