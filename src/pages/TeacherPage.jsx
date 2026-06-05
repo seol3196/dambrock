@@ -1,20 +1,20 @@
 import {
-  BrickWall,
   Copy,
+  Code2,
+  Database,
   ExternalLink,
-  FileCode2,
   Folder,
   FolderPlus,
+  GraduationCap,
   Globe2,
-  HardDrive,
   KeyRound,
+  LayoutDashboard,
   MoreHorizontal,
   Pencil,
   Plus,
   Printer,
   Search,
   Trash2,
-  Users,
   X
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -46,6 +46,18 @@ import { dateText, paddedNumber, wallTone } from '../lib/ui';
 
 const RESET_PASSWORD = '123456';
 const INITIAL_WALL_LIST_COUNT = 24;
+const SIDEBAR_ICON_PROPS = { size: 18, strokeWidth: 2.2 };
+const FOLDER_COLOR_OPTIONS = [
+  { name: '기본', value: '', swatch: '' },
+  { name: '분홍', value: '#f9a8d4', swatch: '#f9a8d4' },
+  { name: '장미', value: '#fca5a5', swatch: '#fca5a5' },
+  { name: '살구', value: '#fdba74', swatch: '#fdba74' },
+  { name: '노랑', value: '#fde68a', swatch: '#fde68a' },
+  { name: '연두', value: '#bef264', swatch: '#bef264' },
+  { name: '민트', value: '#86efac', swatch: '#86efac' },
+  { name: '하늘', value: '#7dd3fc', swatch: '#7dd3fc' },
+  { name: '라벤더', value: '#c4b5fd', swatch: '#c4b5fd' }
+];
 
 function storageText(bytes) {
   const value = Number(bytes || 0);
@@ -134,7 +146,7 @@ export default function TeacherPage() {
             tab === 'walls' ? 'bg-stone-900 text-white' : 'text-stone-700'
           }`}
         >
-          <BrickWall size={18} />
+          <LayoutDashboard {...SIDEBAR_ICON_PROPS} />
           내 담벼락
         </button>
         <button
@@ -144,7 +156,7 @@ export default function TeacherPage() {
             tab === 'students' ? 'bg-stone-900 text-white' : 'text-stone-700'
           }`}
         >
-          <Users size={18} />
+          <GraduationCap {...SIDEBAR_ICON_PROPS} />
           학생 관리
         </button>
         {profile?.canHostHtml && (
@@ -155,7 +167,7 @@ export default function TeacherPage() {
               tab === 'html' ? 'bg-stone-900 text-white' : 'text-stone-700'
             }`}
           >
-            <FileCode2 size={18} />
+            <Code2 {...SIDEBAR_ICON_PROPS} />
             HTML 호스팅
           </button>
         )}
@@ -163,14 +175,14 @@ export default function TeacherPage() {
 
       <section className="mt-4 rounded-[8px] border border-stone-200 bg-stone-50 p-3">
         <div className="flex items-center gap-2 text-sm font-black text-stone-800">
-          <HardDrive size={16} />
+          <Database {...SIDEBAR_ICON_PROPS} />
           사진 저장 공간
         </div>
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
           <div className="h-full rounded-full bg-stone-900" style={{ width: `${storagePercent}%` }} />
         </div>
-        <p className="mt-2 text-xs font-bold text-stone-600">
-          사용량 {storageText(storageUsedBytes)} / 할당량 {storageText(storageLimitBytes)}
+        <p className="mt-2 whitespace-nowrap text-xs font-bold text-stone-600">
+          사용량 {storageText(storageUsedBytes)} / {storageText(storageLimitBytes)}
         </p>
       </section>
     </aside>
@@ -1023,10 +1035,12 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
   const [folderModalOpen, setFolderModalOpen] = useState(false);
   const [folderEditing, setFolderEditing] = useState(null);
   const [folderName, setFolderName] = useState('');
+  const [folderColor, setFolderColor] = useState('');
   const [activeFolderId, setActiveFolderId] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [visibleWallCount, setVisibleWallCount] = useState(INITIAL_WALL_LIST_COUNT);
   const [wallMenuOpenId, setWallMenuOpenId] = useState(null);
+  const [deletingWallId, setDeletingWallId] = useState(null);
   const folderById = useMemo(
     () => Object.fromEntries(folders.map((folder) => [folder.id, folder])),
     [folders]
@@ -1144,6 +1158,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
   function openFolderModal(folder = null) {
     setFolderEditing(folder);
     setFolderName(folder?.name || '');
+    setFolderColor(folder?.color || '');
     setFolderModalOpen(true);
   }
 
@@ -1157,11 +1172,12 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
     }
 
     try {
-      if (folderEditing) await updateWallFolder(folderEditing.id, { name });
-      else await createWallFolder({ name });
+      if (folderEditing) await updateWallFolder(folderEditing.id, { name, color: folderColor });
+      else await createWallFolder({ name, color: folderColor });
       setFolderModalOpen(false);
       setFolderEditing(null);
       setFolderName('');
+      setFolderColor('');
     } catch (error) {
       const code = error?.code || '';
       if (code === 'folder-name-exists') alert('이미 같은 이름의 폴더가 있습니다.');
@@ -1188,7 +1204,13 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
       `${wall.title || '담벼락'} 담벼락과 모든 게시글을 되돌릴 수 없습니다.\n정말 삭제할까요?`
     );
     if (!ok) return;
-    await deleteWall(wall.id);
+    setDeletingWallId(wall.id);
+    await new Promise((resolve) => window.setTimeout(resolve, 200));
+    try {
+      await deleteWall(wall.id);
+    } finally {
+      setDeletingWallId(null);
+    }
   }
 
   return (
@@ -1558,7 +1580,13 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
           {displayedWalls.map((wall) => (
             <article
               key={wall.id}
-              className={`relative rounded-[8px] border border-stone-200 p-4 ${wallTone(wall.id)}`}
+              style={{
+                borderLeftColor: folderById[wall.folderId]?.color || undefined,
+                borderLeftWidth: folderById[wall.folderId]?.color ? 4 : undefined
+              }}
+              className={`relative rounded-[8px] border border-stone-200 p-4 transition-opacity duration-200 ${
+                deletingWallId === wall.id ? 'opacity-0' : 'opacity-100'
+              } ${wallTone(wall.id)}`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -1579,8 +1607,13 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                   >
                     <MoreHorizontal size={18} />
                   </button>
-                  {wallMenuOpenId === wall.id && (
-                    <div className="absolute right-0 top-11 z-20 w-72 rounded-[12px] border border-stone-200 bg-white p-3 text-stone-800 shadow-soft">
+                  <div
+                    className={`absolute right-0 top-11 z-20 w-72 rounded-[12px] border border-stone-200 bg-white p-3 text-stone-800 shadow-soft transition duration-150 ${
+                      wallMenuOpenId === wall.id
+                        ? 'pointer-events-auto translate-y-0 opacity-100'
+                        : 'pointer-events-none -translate-y-1.5 opacity-0'
+                    }`}
+                  >
                       <div className="space-y-3">
                         <div>
                           <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-400">
@@ -1646,7 +1679,6 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                         </button>
                       </div>
                     </div>
-                  )}
                 </div>
               </div>
               <div className="mt-5">
@@ -1722,7 +1754,15 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                   className="flex items-center justify-between gap-3 rounded-[10px] border border-stone-200 bg-stone-50 px-3 py-2"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-stone-900">{folder.name}</p>
+                    <div className="flex min-w-0 items-center gap-2">
+                      {folder.color && (
+                        <span
+                          className="h-3 w-3 shrink-0 rounded-full"
+                          style={{ backgroundColor: folder.color }}
+                        />
+                      )}
+                      <p className="truncate text-sm font-bold text-stone-900">{folder.name}</p>
+                    </div>
                     <p className="text-xs text-stone-500">
                       담벼락 {folderCounts[folder.id] || 0}개
                     </p>
@@ -1774,7 +1814,10 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
               </div>
               <button
                 type="button"
-                onClick={() => setFolderModalOpen(false)}
+                onClick={() => {
+                  setFolderModalOpen(false);
+                  setFolderColor('');
+                }}
                 className="rounded-full p-2 hover:bg-stone-100"
                 aria-label="폴더 모달 닫기"
               >
@@ -1792,6 +1835,37 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                 placeholder="예: 1학기 활동"
               />
             </label>
+            <div className="mt-5">
+              <p className="text-sm font-bold text-stone-800">폴더 색상</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {FOLDER_COLOR_OPTIONS.map((option) => {
+                  const selected = folderColor === option.value;
+                  return (
+                    <button
+                      key={option.name}
+                      type="button"
+                      onClick={() => setFolderColor(option.value)}
+                      className={`grid h-8 w-8 place-items-center rounded-full border transition ${
+                        selected
+                          ? 'border-stone-900 ring-2 ring-stone-900/15'
+                          : 'border-stone-200 hover:border-stone-400'
+                      }`}
+                      title={option.name}
+                      aria-label={`폴더 색상 ${option.name}`}
+                    >
+                      {option.swatch ? (
+                        <span
+                          className="h-5 w-5 rounded-full"
+                          style={{ backgroundColor: option.swatch }}
+                        />
+                      ) : (
+                        <span className="h-5 w-5 rounded-full border border-dashed border-stone-300 bg-white" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div className="mt-2 flex items-center justify-between text-xs text-stone-500">
               <span>{folderName.trim().length}/20자</span>
               <span>{folders.length}/20개 사용 중</span>
@@ -1806,7 +1880,10 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
               </button>
               <button
                 type="button"
-                onClick={() => setFolderModalOpen(false)}
+                onClick={() => {
+                  setFolderModalOpen(false);
+                  setFolderColor('');
+                }}
                 className="h-11 rounded-[8px] border border-stone-200 px-4 text-sm font-bold text-stone-700"
               >
                 닫기

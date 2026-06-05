@@ -162,6 +162,26 @@ function normalizeFolderName(value) {
   return String(value || '').trim().slice(0, 20);
 }
 
+const FOLDER_COLOR_PRESETS = new Set([
+  '#f9a8d4',
+  '#fca5a5',
+  '#fdba74',
+  '#fde68a',
+  '#bef264',
+  '#86efac',
+  '#7dd3fc',
+  '#c4b5fd'
+]);
+
+function normalizeFolderColor(value) {
+  const color = String(value || '').trim().toLowerCase();
+  if (!color) return null;
+  if (FOLDER_COLOR_PRESETS.has(color)) return color;
+  const error = new Error('invalid-folder-color');
+  error.status = 400;
+  throw error;
+}
+
 function normalizeHtmlTitle(value) {
   return String(value || '').trim().slice(0, 80) || 'HTML 사이트';
 }
@@ -1062,6 +1082,7 @@ app.get('/api/wall-folders', requireUser, requireRole('teacher'), (req, res) => 
 
 app.post('/api/wall-folders', requireUser, requireRole('teacher'), (req, res) => {
   const name = normalizeFolderName(req.body.name);
+  const color = normalizeFolderColor(req.body.color);
   if (!name) return res.status(400).json({ error: 'folder-name-required' });
   const count = db
     .prepare('SELECT COUNT(*) AS count FROM wall_folders WHERE owner_id = ?')
@@ -1071,9 +1092,9 @@ app.post('/api/wall-folders', requireUser, requireRole('teacher'), (req, res) =>
   const folderId = id('folder_');
   try {
     db.prepare(
-      `INSERT INTO wall_folders (id, owner_id, name, created_at)
-       VALUES (?, ?, ?, ?)`
-    ).run(folderId, req.user.uid, name, now());
+      `INSERT INTO wall_folders (id, owner_id, name, color, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(folderId, req.user.uid, name, color, now());
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'folder-name-exists' });
@@ -1090,10 +1111,13 @@ app.patch('/api/wall-folders/:id', requireUser, requireRole('teacher'), (req, re
   if (!folder) return res.status(404).json({ error: 'not-found' });
   if (folder.owner_id !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
   const name = normalizeFolderName(req.body.name);
+  const color =
+    req.body.color === undefined ? folder.color || null : normalizeFolderColor(req.body.color);
   if (!name) return res.status(400).json({ error: 'folder-name-required' });
   try {
-    db.prepare('UPDATE wall_folders SET name = ?, updated_at = ? WHERE id = ?').run(
+    db.prepare('UPDATE wall_folders SET name = ?, color = ?, updated_at = ? WHERE id = ?').run(
       name,
+      color,
       now(),
       folder.id
     );

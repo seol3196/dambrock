@@ -93,6 +93,7 @@ export function toWallFolder(row) {
     id: row.id,
     ownerId: row.owner_id,
     name: row.name,
+    color: row.color || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -197,6 +198,7 @@ export function initDb() {
       id TEXT PRIMARY KEY,
       owner_id TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
       name TEXT NOT NULL,
+      color TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT,
       UNIQUE(owner_id, name)
@@ -296,6 +298,11 @@ export function initDb() {
     db.prepare('ALTER TABLE walls ADD COLUMN image_uploads_enabled INTEGER NOT NULL DEFAULT 1').run();
   }
   db.prepare('CREATE INDEX IF NOT EXISTS idx_walls_folder ON walls(folder_id)').run();
+
+  const wallFolderColumns = db.prepare('PRAGMA table_info(wall_folders)').all();
+  if (!wallFolderColumns.some((column) => column.name === 'color')) {
+    db.prepare('ALTER TABLE wall_folders ADD COLUMN color TEXT').run();
+  }
 
   const postColumns = db.prepare('PRAGMA table_info(posts)').all();
   if (!postColumns.some((column) => column.name === 'template_answers')) {
