@@ -45,6 +45,7 @@ import { pickRandomQuote } from '../lib/quotes';
 import { dateText, paddedNumber, wallTone } from '../lib/ui';
 
 const RESET_PASSWORD = '123456';
+const INITIAL_WALL_LIST_COUNT = 24;
 
 function storageText(bytes) {
   const value = Number(bytes || 0);
@@ -1024,6 +1025,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
   const [folderName, setFolderName] = useState('');
   const [activeFolderId, setActiveFolderId] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [visibleWallCount, setVisibleWallCount] = useState(INITIAL_WALL_LIST_COUNT);
   const [wallMenuOpenId, setWallMenuOpenId] = useState(null);
   const folderById = useMemo(
     () => Object.fromEntries(folders.map((folder) => [folder.id, folder])),
@@ -1054,6 +1056,9 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
     }
     return counts;
   }, [folders, walls]);
+  const hasWallListFilter = activeFolderId !== 'all' || Boolean(searchTerm.trim());
+  const displayedWalls = hasWallListFilter ? sortedWalls : sortedWalls.slice(0, visibleWallCount);
+  const hiddenWallCount = Math.max(sortedWalls.length - displayedWalls.length, 0);
   const templateFields = form.postTemplate?.fields || [];
   const previewFields = templateFields.slice(0, 3);
 
@@ -1061,6 +1066,10 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
     if (activeFolderId === 'all' || activeFolderId === 'unfiled') return;
     if (!folders.some((folder) => folder.id === activeFolderId)) setActiveFolderId('all');
   }, [activeFolderId, folders]);
+
+  useEffect(() => {
+    setVisibleWallCount(INITIAL_WALL_LIST_COUNT);
+  }, [activeFolderId, searchTerm]);
 
   async function copyWallLink(wallId) {
     const url = `${origin}/wall/${wallId}`;
@@ -1546,7 +1555,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
         </label>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-          {sortedWalls.map((wall) => (
+          {displayedWalls.map((wall) => (
             <article
               key={wall.id}
               className={`relative rounded-[8px] border border-stone-200 p-4 ${wallTone(wall.id)}`}
@@ -1657,6 +1666,20 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
             </p>
           )}
         </div>
+        {!hasWallListFilter && hiddenWallCount > 0 && (
+          <div className="mt-5 flex flex-col items-center gap-2 border-t border-stone-200 pt-4">
+            <p className="text-sm font-semibold text-stone-500">
+              최근 담벼락 {displayedWalls.length}개 표시 중 · 남은 담벼락 {hiddenWallCount}개
+            </p>
+            <button
+              type="button"
+              onClick={() => setVisibleWallCount((count) => count + INITIAL_WALL_LIST_COUNT)}
+              className="rounded-[8px] border border-stone-300 bg-white px-4 py-2 text-sm font-bold text-stone-800 shadow-sm transition hover:bg-stone-50"
+            >
+              더 보기
+            </button>
+          </div>
+        )}
       </section>
 
       {folderManagerOpen && (
