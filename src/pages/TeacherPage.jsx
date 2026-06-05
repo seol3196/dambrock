@@ -42,22 +42,38 @@ import {
   updateWallFolder
 } from '../lib/firestore';
 import { pickRandomQuote } from '../lib/quotes';
-import { dateText, paddedNumber, wallTone } from '../lib/ui';
+import { dateText, paddedNumber } from '../lib/ui';
 
 const RESET_PASSWORD = '123456';
 const INITIAL_WALL_LIST_COUNT = 24;
 const SIDEBAR_ICON_PROPS = { size: 18, strokeWidth: 2.2 };
+const DEFAULT_WALL_CARD_COLOR = '#fff8d6';
 const FOLDER_COLOR_OPTIONS = [
   { name: '기본', value: '', swatch: '' },
-  { name: '분홍', value: '#f9a8d4', swatch: '#f9a8d4' },
-  { name: '장미', value: '#fca5a5', swatch: '#fca5a5' },
-  { name: '살구', value: '#fdba74', swatch: '#fdba74' },
-  { name: '노랑', value: '#fde68a', swatch: '#fde68a' },
-  { name: '연두', value: '#bef264', swatch: '#bef264' },
-  { name: '민트', value: '#86efac', swatch: '#86efac' },
-  { name: '하늘', value: '#7dd3fc', swatch: '#7dd3fc' },
-  { name: '라벤더', value: '#c4b5fd', swatch: '#c4b5fd' }
+  { name: '분홍', value: '#fde8ef', swatch: '#fde8ef' },
+  { name: '살구', value: '#fdebd8', swatch: '#fdebd8' },
+  { name: '노랑', value: '#fff4c6', swatch: '#fff4c6' },
+  { name: '세이지', value: '#e8f3d8', swatch: '#e8f3d8' },
+  { name: '민트', value: '#def3e8', swatch: '#def3e8' },
+  { name: '하늘', value: '#e3f0fb', swatch: '#e3f0fb' },
+  { name: '라벤더', value: '#eee8fb', swatch: '#eee8fb' },
+  { name: '모래', value: '#f3ead8', swatch: '#f3ead8' }
 ];
+const LEGACY_FOLDER_COLOR_MAP = {
+  '#f9a8d4': '#fde8ef',
+  '#fca5a5': '#fde8ef',
+  '#fdba74': '#fdebd8',
+  '#fde68a': '#fff4c6',
+  '#bef264': '#e8f3d8',
+  '#86efac': '#def3e8',
+  '#7dd3fc': '#e3f0fb',
+  '#c4b5fd': '#eee8fb'
+};
+
+function folderColorValue(value) {
+  const color = String(value || '').trim().toLowerCase();
+  return LEGACY_FOLDER_COLOR_MAP[color] || color;
+}
 
 function storageText(bytes) {
   const value = Number(bytes || 0);
@@ -1158,7 +1174,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
   function openFolderModal(folder = null) {
     setFolderEditing(folder);
     setFolderName(folder?.name || '');
-    setFolderColor(folder?.color || '');
+    setFolderColor(folderColorValue(folder?.color));
     setFolderModalOpen(true);
   }
 
@@ -1581,12 +1597,11 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
             <article
               key={wall.id}
               style={{
-                borderLeftColor: folderById[wall.folderId]?.color || undefined,
-                borderLeftWidth: folderById[wall.folderId]?.color ? 4 : undefined
+                backgroundColor: folderColorValue(folderById[wall.folderId]?.color) || DEFAULT_WALL_CARD_COLOR
               }}
               className={`relative rounded-[8px] border border-stone-200 p-4 transition-opacity duration-200 ${
                 deletingWallId === wall.id ? 'opacity-0' : 'opacity-100'
-              } ${wallTone(wall.id)}`}
+              }`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -1758,7 +1773,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                       {folder.color && (
                         <span
                           className="h-3 w-3 shrink-0 rounded-full"
-                          style={{ backgroundColor: folder.color }}
+                          style={{ backgroundColor: folderColorValue(folder.color) }}
                         />
                       )}
                       <p className="truncate text-sm font-bold text-stone-900">{folder.name}</p>

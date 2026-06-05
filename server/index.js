@@ -163,19 +163,30 @@ function normalizeFolderName(value) {
 }
 
 const FOLDER_COLOR_PRESETS = new Set([
-  '#f9a8d4',
-  '#fca5a5',
-  '#fdba74',
-  '#fde68a',
-  '#bef264',
-  '#86efac',
-  '#7dd3fc',
-  '#c4b5fd'
+  '#fde8ef',
+  '#fdebd8',
+  '#fff4c6',
+  '#e8f3d8',
+  '#def3e8',
+  '#e3f0fb',
+  '#eee8fb',
+  '#f3ead8'
 ]);
+const LEGACY_FOLDER_COLOR_MAP = {
+  '#f9a8d4': '#fde8ef',
+  '#fca5a5': '#fde8ef',
+  '#fdba74': '#fdebd8',
+  '#fde68a': '#fff4c6',
+  '#bef264': '#e8f3d8',
+  '#86efac': '#def3e8',
+  '#7dd3fc': '#e3f0fb',
+  '#c4b5fd': '#eee8fb'
+};
 
 function normalizeFolderColor(value) {
   const color = String(value || '').trim().toLowerCase();
   if (!color) return null;
+  if (LEGACY_FOLDER_COLOR_MAP[color]) return LEGACY_FOLDER_COLOR_MAP[color];
   if (FOLDER_COLOR_PRESETS.has(color)) return color;
   const error = new Error('invalid-folder-color');
   error.status = 400;
