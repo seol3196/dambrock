@@ -1552,10 +1552,13 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
                 key={folder.id}
                 type="button"
                 onClick={() => setActiveFolderId(folder.id)}
-                className={`inline-flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-sm font-bold ${
+                style={{
+                  backgroundColor: folderColorValue(folder.color) || DEFAULT_WALL_CARD_COLOR
+                }}
+                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-3 py-1.5 text-sm font-bold text-stone-800 ${
                   activeFolderId === folder.id
-                    ? 'bg-stone-900 text-white'
-                    : 'border border-stone-200 bg-white text-stone-700'
+                    ? 'border-stone-700 shadow-sm ring-2 ring-stone-900/10'
+                    : 'border-stone-200 hover:border-stone-300'
                 }`}
               >
                 <Folder size={14} />
@@ -1699,7 +1702,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
               <div className="mt-5">
                 <Link
                   to={`/wall/${wall.id}`}
-                  className="inline-flex items-center gap-1 rounded-[8px] bg-stone-900 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-stone-700"
+                  className="inline-flex items-center gap-1 rounded-[8px] border border-stone-300 bg-white/75 px-4 py-2.5 text-sm font-bold text-stone-800 shadow-sm transition hover:border-stone-400 hover:bg-white"
                 >
                   <ExternalLink size={15} />
                   들어가기
