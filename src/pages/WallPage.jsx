@@ -3,6 +3,8 @@ import {
   Copy,
   Download,
   ImagePlus,
+  Maximize2,
+  Minimize2,
   MoreHorizontal,
   Plus,
   Send,
@@ -161,6 +163,7 @@ export default function WallPage() {
   const [wallMissing, setWallMissing] = useState(false);
   const [posts, setPosts] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
+  const [postModalExpanded, setPostModalExpanded] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [qrPreviewOpen, setQrPreviewOpen] = useState(false);
   const [shareMessage, setShareMessage] = useState('');
@@ -434,6 +437,7 @@ export default function WallPage() {
       setDeleteImageIds([]);
       setActiveImageFieldId(null);
       setPostTargetColumn(null);
+      setPostModalExpanded(false);
       setModalOpen(false);
     } catch (error) {
       if (error?.code === 'storage-limit-exceeded') {
@@ -469,6 +473,7 @@ export default function WallPage() {
     setDeleteImageIds([]);
     setActiveImageFieldId(null);
     setPostError('');
+    setPostModalExpanded(false);
     setModalOpen(true);
   }
 
@@ -490,6 +495,7 @@ export default function WallPage() {
     setDeleteImageIds([]);
     setActiveImageFieldId(null);
     setPostError('');
+    setPostModalExpanded(false);
     setModalOpen(true);
   }
 
@@ -516,6 +522,7 @@ export default function WallPage() {
       setExistingPostImages([]);
       setDeleteImageIds([]);
       setActiveImageFieldId(null);
+      setPostModalExpanded(false);
       setModalOpen(false);
       return;
     }
@@ -553,6 +560,7 @@ export default function WallPage() {
     setExistingPostImages([]);
     setDeleteImageIds([]);
     setActiveImageFieldId(null);
+    setPostModalExpanded(false);
     setModalOpen(false);
   }
 
@@ -1467,26 +1475,42 @@ export default function WallPage() {
           <form
             onSubmit={editingPost ? savePostEdit : submitPost}
             onPaste={handlePasteImages}
-            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-[18px] bg-white p-5 shadow-paper"
+            className={`flex w-full flex-col rounded-[18px] bg-white p-5 shadow-paper ${
+              postModalExpanded
+                ? 'h-[88vh] max-h-[88vh] max-w-5xl'
+                : 'max-h-[90vh] max-w-xl overflow-y-auto'
+            }`}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex shrink-0 items-center justify-between gap-3">
               <h2 className="text-xl font-bold">
                 {isWorksheetWall ? '학습지 포스트잇 작성' : '포스트잇 작성'}
               </h2>
-              <button
-                type="button"
-                aria-label="닫기"
-                onClick={() => {
-                  setModalOpen(false);
-                  setEditingPost(null);
-                }}
-                className="rounded-full p-2 hover:bg-stone-100"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPostModalExpanded((value) => !value)}
+                  className="inline-flex items-center gap-1.5 rounded-[8px] border border-stone-200 bg-white px-3 py-2 text-sm font-bold text-stone-700 hover:border-stone-300"
+                >
+                  {postModalExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                  {postModalExpanded ? '작성칸 줄이기' : '작성칸 넓히기'}
+                </button>
+                <button
+                  type="button"
+                  aria-label="닫기"
+                  onClick={() => {
+                    setModalOpen(false);
+                    setEditingPost(null);
+                    setPostModalExpanded(false);
+                  }}
+                  className="rounded-full p-2 hover:bg-stone-100"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
+            <div className={`min-h-0 ${postModalExpanded ? 'mt-4 flex-1 overflow-y-auto pr-1' : ''}`}>
             {isWorksheetWall ? (
-              <div className="mt-4 space-y-4">
+              <div className="space-y-4">
                 {templateFields.map((field) => (
                   <div key={field.id} className="block">
                     <span className="mb-2 block text-sm font-bold text-stone-800">
@@ -1599,7 +1623,9 @@ export default function WallPage() {
                             }
                           })
                         }
-                        className="min-h-28 w-full resize-y rounded-[10px] border border-stone-200 p-3 text-base leading-7 outline-none focus:border-amber-500"
+                        className={`w-full resize-y rounded-[10px] border border-stone-200 p-3 text-base leading-7 outline-none focus:border-amber-500 ${
+                          postModalExpanded ? 'min-h-72' : 'min-h-28'
+                        }`}
                       />
                     ) : (
                       <input
@@ -1624,10 +1650,13 @@ export default function WallPage() {
               <textarea
                 value={form.content}
                 onChange={(e) => setForm({ ...form, content: e.target.value })}
-                className="mt-4 min-h-40 w-full resize-y rounded-[10px] border border-stone-200 p-3 text-base leading-7 outline-none focus:border-amber-500"
+                className={`w-full resize-y rounded-[10px] border border-stone-200 p-3 text-base leading-7 outline-none focus:border-amber-500 ${
+                  postModalExpanded ? 'h-full min-h-[48vh]' : 'mt-4 min-h-40'
+                }`}
                 placeholder="생각이나 링크를 자유롭게 적어보세요."
               />
             )}
+            </div>
             {!isWorksheetWall &&
               (wall?.imageUploadsEnabled !== false ||
                 existingPostImages.some((image) => !image.fieldId && !deleteImageIds.includes(image.id))) && (
