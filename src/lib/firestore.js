@@ -29,6 +29,10 @@ export function subscribeWallFolders(params, onValue) {
   return subscribe('/api/wall-folders', params, onValue);
 }
 
+export function subscribeStudentClasses(params, onValue) {
+  return subscribe('/api/student-classes', params, onValue);
+}
+
 export function subscribeHtmlSites(onValue, onError) {
   return subscribe('/api/html-sites', {}, onValue, { onError });
 }
@@ -75,6 +79,18 @@ export function updateWallFolder(folderId, data) {
 
 export function deleteWallFolder(folderId) {
   return apiFetch(`/api/wall-folders/${folderId}`, { method: 'DELETE' });
+}
+
+export function createStudentClass(data) {
+  return apiFetch('/api/student-classes', { method: 'POST', body: data });
+}
+
+export function updateStudentClass(classId, data) {
+  return apiFetch(`/api/student-classes/${classId}`, { method: 'PATCH', body: data });
+}
+
+export function deleteStudentClass(classId) {
+  return apiFetch(`/api/student-classes/${classId}`, { method: 'DELETE' });
 }
 
 export async function exportWallCsv(wallId) {

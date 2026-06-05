@@ -38,6 +38,7 @@ export function toPublicUser(row) {
     role: row.role,
     displayName: row.display_name,
     teacherId: row.teacher_id,
+    classId: row.class_id || null,
     passwordHint: row.password_hint,
     canHostHtml: Boolean(row.can_host_html),
     storageLimitBytes: row.storage_limit_bytes,
@@ -88,6 +89,18 @@ export function toWall(row) {
 }
 
 export function toWallFolder(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    ownerId: row.owner_id,
+    name: row.name,
+    color: row.color || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export function toStudentClass(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -156,6 +169,7 @@ export function initDb() {
       role TEXT NOT NULL CHECK (role IN ('admin', 'teacher', 'student')),
       display_name TEXT NOT NULL,
       teacher_id TEXT,
+      class_id TEXT,
       password_hint TEXT,
       can_host_html INTEGER NOT NULL DEFAULT 0,
       storage_limit_bytes INTEGER NOT NULL DEFAULT 10737418240,
@@ -195,6 +209,16 @@ export function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS wall_folders (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      color TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT,
+      UNIQUE(owner_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS student_classes (
       id TEXT PRIMARY KEY,
       owner_id TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
       name TEXT NOT NULL,
@@ -254,6 +278,7 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_users_teacher ON users(teacher_id);
     CREATE INDEX IF NOT EXISTS idx_walls_owner ON walls(owner_id);
     CREATE INDEX IF NOT EXISTS idx_wall_folders_owner ON wall_folders(owner_id);
+    CREATE INDEX IF NOT EXISTS idx_student_classes_owner ON student_classes(owner_id);
     CREATE INDEX IF NOT EXISTS idx_posts_wall ON posts(wall_id);
     CREATE INDEX IF NOT EXISTS idx_post_images_post ON post_images(post_id);
     CREATE INDEX IF NOT EXISTS idx_post_images_owner ON post_images(owner_id);
@@ -271,6 +296,10 @@ export function initDb() {
   if (!userColumns.some((column) => column.name === 'storage_used_bytes')) {
     db.prepare('ALTER TABLE users ADD COLUMN storage_used_bytes INTEGER NOT NULL DEFAULT 0').run();
   }
+  if (!userColumns.some((column) => column.name === 'class_id')) {
+    db.prepare('ALTER TABLE users ADD COLUMN class_id TEXT').run();
+  }
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_users_class ON users(class_id)').run();
 
   const wallColumns = db.prepare('PRAGMA table_info(walls)').all();
   if (!wallColumns.some((column) => column.name === 'show_author_names')) {
@@ -303,6 +332,19 @@ export function initDb() {
   if (!wallFolderColumns.some((column) => column.name === 'color')) {
     db.prepare('ALTER TABLE wall_folders ADD COLUMN color TEXT').run();
   }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS student_classes (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      color TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT,
+      UNIQUE(owner_id, name)
+    );
+  `);
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_student_classes_owner ON student_classes(owner_id)').run();
 
   const postColumns = db.prepare('PRAGMA table_info(posts)').all();
   if (!postColumns.some((column) => column.name === 'template_answers')) {

@@ -24,19 +24,23 @@ import Layout from '../components/Layout.jsx';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { createUser } from '../lib/auth';
 import {
+  createStudentClass,
   createWall,
   createWallFolder,
   createHtmlSite,
   deleteHtmlSite,
+  deleteStudentClass,
   deleteWallFolder,
   deleteStudentAccount,
   deleteStudentAccounts,
   deleteWall,
   setStudentPasswords,
+  subscribeStudentClasses,
   subscribeUsers,
   subscribeHtmlSites,
   subscribeWallFolders,
   subscribeWalls,
+  updateStudentClass,
   updateUser,
   updateWall,
   updateWallFolder
@@ -87,6 +91,7 @@ export default function TeacherPage() {
   const { user, displayId, profile } = useAuth();
   const [tab, setTab] = useState('walls');
   const [students, setStudents] = useState([]);
+  const [studentClasses, setStudentClasses] = useState([]);
   const [walls, setWalls] = useState([]);
   const [folders, setFolders] = useState([]);
   const [htmlSites, setHtmlSites] = useState([]);
@@ -95,12 +100,14 @@ export default function TeacherPage() {
     start: '01',
     end: '30',
     password: RESET_PASSWORD,
-    nameList: ''
+    nameList: '',
+    classId: ''
   });
   const [singleStudentForm, setSingleStudentForm] = useState({
     id: '',
     displayName: '',
-    password: RESET_PASSWORD
+    password: RESET_PASSWORD,
+    classId: ''
   });
   const [wallForm, setWallForm] = useState({
     title: '',
@@ -136,6 +143,7 @@ export default function TeacherPage() {
     );
     const unsubWalls = subscribeWalls({ ownerId: user.uid }, setWalls);
     const unsubFolders = subscribeWallFolders({ ownerId: user.uid }, setFolders);
+    const unsubStudentClasses = subscribeStudentClasses({ ownerId: user.uid }, setStudentClasses);
     const unsubHtmlSites = profile?.canHostHtml
       ? subscribeHtmlSites(setHtmlSites, () => setHtmlSites([]))
       : () => setHtmlSites([]);
@@ -144,6 +152,7 @@ export default function TeacherPage() {
       unsubStudents();
       unsubWalls();
       unsubFolders();
+      unsubStudentClasses();
       unsubHtmlSites();
     };
   }, [profile?.canHostHtml, user.uid]);
@@ -264,6 +273,7 @@ export default function TeacherPage() {
         await createUser(id, password, 'student', {
           displayName: studentEntry.displayName,
           teacherId: user.uid,
+          classId: studentForm.classId || null,
           passwordHint: password
         });
       }
@@ -308,13 +318,15 @@ export default function TeacherPage() {
       await createUser(id, password, 'student', {
         displayName,
         teacherId: user.uid,
+        classId: singleStudentForm.classId || null,
         passwordHint: password
       });
       alert('학생 계정을 생성했습니다.');
       setSingleStudentForm({
         id: '',
         displayName: '',
-        password: RESET_PASSWORD
+        password: RESET_PASSWORD,
+        classId: singleStudentForm.classId
       });
       return true;
     } catch (error) {
@@ -374,6 +386,7 @@ export default function TeacherPage() {
           setSingleForm={setSingleStudentForm}
           submitSingle={createSingleStudent}
           students={students}
+          studentClasses={studentClasses}
         />
       ) : tab === 'html' && profile?.canHostHtml ? (
         <HtmlHostingManager sites={htmlSites} origin={origin} />
@@ -398,7 +411,8 @@ function StudentManager({
   singleForm,
   setSingleForm,
   submitSingle,
-  students
+  students,
+  studentClasses
 }) {
   const [editingUid, setEditingUid] = useState(null);
   const [nameDraft, setNameDraft] = useState('');
@@ -406,17 +420,60 @@ function StudentManager({
   const [passwordDraft, setPasswordDraft] = useState('');
   const [selectedUids, setSelectedUids] = useState([]);
   const [batchPassword, setBatchPassword] = useState('');
+  const [batchClassId, setBatchClassId] = useState('');
+  const [activeClassId, setActiveClassId] = useState('all');
+  const [studentSearch, setStudentSearch] = useState('');
   const [studentCreateMode, setStudentCreateMode] = useState(null);
+  const [classManagerOpen, setClassManagerOpen] = useState(false);
+  const [classModalOpen, setClassModalOpen] = useState(false);
+  const [classEditing, setClassEditing] = useState(null);
+  const [className, setClassName] = useState('');
+  const [classColor, setClassColor] = useState('');
+
+  const classById = useMemo(
+    () => Object.fromEntries(studentClasses.map((studentClass) => [studentClass.id, studentClass])),
+    [studentClasses]
+  );
+  const classCounts = useMemo(() => {
+    const counts = { all: students.length, unfiled: 0 };
+    for (const studentClass of studentClasses) counts[studentClass.id] = 0;
+    for (const student of students) {
+      if (student.classId && counts[student.classId] != null) counts[student.classId] += 1;
+      else counts.unfiled += 1;
+    }
+    return counts;
+  }, [studentClasses, students]);
 
   const sorted = useMemo(
-    () =>
-      [...students].sort((a, b) =>
-        (a.displayName || a.id).localeCompare(b.displayName || b.id, 'ko')
-      ),
-    [students]
+    () => {
+      const keyword = studentSearch.trim().toLowerCase();
+      return [...students]
+        .filter((student) => {
+          const classMatched =
+            activeClassId === 'all' ||
+            (activeClassId === 'unfiled' ? !student.classId : student.classId === activeClassId);
+          if (!classMatched) return false;
+          if (!keyword) return true;
+          const classNameValue = classById[student.classId]?.name || '';
+          return [student.displayName, student.id, classNameValue]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(keyword));
+        })
+        .sort((a, b) => (a.displayName || a.id).localeCompare(b.displayName || b.id, 'ko'));
+    },
+    [activeClassId, classById, studentSearch, students]
   );
   const selectedCount = selectedUids.length;
-  const allSelected = sorted.length > 0 && selectedCount === sorted.length;
+  const visibleSelectedCount = sorted.filter((student) => selectedUids.includes(student.uid)).length;
+  const allSelected = sorted.length > 0 && visibleSelectedCount === sorted.length;
+
+  useEffect(() => {
+    if (activeClassId !== 'all' && activeClassId !== 'unfiled') {
+      if (!studentClasses.some((studentClass) => studentClass.id === activeClassId)) {
+        setActiveClassId('all');
+      }
+    }
+  }, [activeClassId, studentClasses]);
 
   useEffect(() => {
     setSelectedUids((current) =>
@@ -424,12 +481,88 @@ function StudentManager({
     );
   }, [sorted]);
 
+  useEffect(() => {
+    setSelectedUids([]);
+  }, [activeClassId, studentSearch]);
+
   async function saveStudentName(student) {
     const nextName = nameDraft.trim();
     if (!nextName) return;
     await updateUser(student.uid, { displayName: nextName });
     setEditingUid(null);
     setNameDraft('');
+  }
+
+  async function saveStudentClass(student, classId) {
+    try {
+      await updateUser(student.uid, { classId: classId || null });
+    } catch (error) {
+      alert(functionErrorMessage(error, '학생 클래스를 변경하지 못했습니다.'));
+    }
+  }
+
+  async function applyBatchClass() {
+    if (!selectedCount) {
+      alert('학생을 먼저 선택해 주세요.');
+      return;
+    }
+    try {
+      await Promise.all(
+        selectedUids.map((uid) => updateUser(uid, { classId: batchClassId || null }))
+      );
+      setSelectedUids([]);
+      alert(`학생 ${selectedCount}명의 클래스를 변경했습니다.`);
+    } catch (error) {
+      alert(functionErrorMessage(error, '학생 클래스 일괄 변경 중 오류가 발생했습니다.'));
+    }
+  }
+
+  function openClassModal(studentClass = null) {
+    setClassEditing(studentClass);
+    setClassName(studentClass?.name || '');
+    setClassColor(folderColorValue(studentClass?.color));
+    setClassModalOpen(true);
+  }
+
+  async function saveClass(event) {
+    event.preventDefault();
+    const name = className.trim();
+    if (!name) return;
+    if (!classEditing && studentClasses.length >= 30) {
+      alert('클래스는 최대 30개까지 만들 수 있습니다.');
+      return;
+    }
+
+    try {
+      if (classEditing) {
+        await updateStudentClass(classEditing.id, { name, color: classColor });
+      } else {
+        await createStudentClass({ name, color: classColor });
+      }
+      setClassModalOpen(false);
+      setClassEditing(null);
+      setClassName('');
+      setClassColor('');
+    } catch (error) {
+      const code = error?.code || error?.message || '';
+      if (code === 'student-class-name-exists') alert('이미 같은 이름의 클래스가 있습니다.');
+      else if (code === 'student-class-limit-reached') alert('클래스는 최대 30개까지 만들 수 있습니다.');
+      else alert(functionErrorMessage(error, '클래스를 저장하지 못했습니다.'));
+    }
+  }
+
+  async function removeClass(studentClass) {
+    const ok = window.confirm(
+      `${studentClass.name} 클래스를 삭제하면 학생들은 미분류로 이동합니다. 계속할까요?`
+    );
+    if (!ok) return;
+
+    try {
+      await deleteStudentClass(studentClass.id);
+      if (activeClassId === studentClass.id) setActiveClassId('all');
+    } catch (error) {
+      alert(functionErrorMessage(error, '클래스를 삭제하지 못했습니다.'));
+    }
   }
 
   function functionErrorMessage(error, fallback) {
@@ -500,7 +633,11 @@ function StudentManager({
   }
 
   function toggleAllSelected() {
-    setSelectedUids(allSelected ? [] : sorted.map((student) => student.uid));
+    const visibleUids = sorted.map((student) => student.uid);
+    setSelectedUids((current) => {
+      if (allSelected) return current.filter((uid) => !visibleUids.includes(uid));
+      return Array.from(new Set([...current, ...visibleUids]));
+    });
   }
 
   async function removeStudent(student) {
@@ -545,10 +682,18 @@ function StudentManager({
           <div>
             <h2 className="text-xl font-bold">학생 목록</h2>
             <p className="mt-1 text-sm text-stone-500">
-              이름 수정, 개별 비밀번호 변경, 선택 학생 비밀번호 일괄 변경, 선택 학생 삭제를 여기서 처리합니다.
+              학생을 표로 관리하고 클래스별로 분류합니다.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setClassManagerOpen(true)}
+              className="inline-flex items-center gap-2 rounded-[8px] border border-stone-300 bg-white px-3 py-2 text-sm font-bold text-stone-700"
+            >
+              <FolderPlus size={16} />
+              클래스 관리
+            </button>
             <button
               type="button"
               onClick={() => setStudentCreateMode('single')}
@@ -576,23 +721,92 @@ function StudentManager({
           </div>
         </div>
 
-        <div className="mt-5 rounded-[8px] border border-stone-200 bg-stone-50 p-4">
-          <div className="grid gap-3 xl:grid-cols-[auto_minmax(220px,1fr)_max-content_max-content] xl:items-end">
-            <label className="inline-flex h-11 items-center gap-2 whitespace-nowrap text-sm font-bold text-stone-700">
-              <input type="checkbox" checked={allSelected} onChange={toggleAllSelected} />
-              전체 선택
-            </label>
-            <Field label={`선택 학생 ${selectedCount}명 비밀번호 일괄 변경`}>
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          {[
+            ['all', '전체', classCounts.all, ''],
+            ['unfiled', '미분류', classCounts.unfiled, '']
+          ].map(([id, label, count]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActiveClassId(id)}
+              className={`shrink-0 rounded-full border px-3 py-1.5 text-sm font-bold ${
+                activeClassId === id
+                  ? 'border-stone-800 bg-stone-900 text-white'
+                  : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300'
+              }`}
+            >
+              {label} {count}
+            </button>
+          ))}
+          {studentClasses.map((studentClass) => (
+            <button
+              key={studentClass.id}
+              type="button"
+              onClick={() => setActiveClassId(studentClass.id)}
+              style={{
+                backgroundColor: folderColorValue(studentClass.color) || DEFAULT_WALL_CARD_COLOR
+              }}
+              className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-3 py-1.5 text-sm font-bold text-stone-800 ${
+                activeClassId === studentClass.id
+                  ? 'border-stone-700 shadow-sm ring-2 ring-stone-900/10'
+                  : 'border-stone-200 hover:border-stone-300'
+              }`}
+            >
+              <GraduationCap size={14} />
+              {studentClass.name} {classCounts[studentClass.id] || 0}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-4 grid gap-3 rounded-[8px] border border-stone-200 bg-stone-50 p-4 xl:grid-cols-[minmax(220px,1fr)_minmax(180px,220px)_minmax(220px,1fr)_max-content_max-content] xl:items-end">
+          <label className="block">
+            <span className="text-sm font-bold text-stone-700">학생 검색</span>
+            <div className="mt-1 flex h-11 items-center gap-2 rounded-[8px] border border-stone-200 bg-white px-3">
+              <Search size={16} className="text-stone-400" />
               <input
-                type="password"
-                minLength={6}
-                autoComplete="new-password"
-                value={batchPassword}
-                onChange={(e) => setBatchPassword(e.target.value)}
-                className="h-11 w-full rounded-[8px] border border-stone-200 px-3"
-                placeholder="새 비밀번호"
+                value={studentSearch}
+                onChange={(event) => setStudentSearch(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+                placeholder="이름, ID, 클래스"
               />
-            </Field>
+            </div>
+          </label>
+          <Field label="선택 학생 클래스 변경">
+            <select
+              value={batchClassId}
+              onChange={(event) => setBatchClassId(event.target.value)}
+              className="h-11 w-full rounded-[8px] border border-stone-200 bg-white px-3"
+            >
+              <option value="">미분류</option>
+              {studentClasses.map((studentClass) => (
+                <option key={studentClass.id} value={studentClass.id}>
+                  {studentClass.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={`선택 학생 ${selectedCount}명 비밀번호 일괄 변경`}>
+            <input
+              type="password"
+              minLength={6}
+              autoComplete="new-password"
+              value={batchPassword}
+              onChange={(e) => setBatchPassword(e.target.value)}
+              className="h-11 w-full rounded-[8px] border border-stone-200 px-3"
+              placeholder="새 비밀번호"
+            />
+          </Field>
+          <button
+            type="button"
+            onClick={applyBatchClass}
+            disabled={!selectedCount}
+            className="inline-flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-[8px] border border-stone-300 bg-white px-4 text-sm font-bold text-stone-700 disabled:cursor-not-allowed disabled:border-stone-200 disabled:text-stone-400"
+          >
+            <GraduationCap size={16} />
+            클래스 변경
+          </button>
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={applyBatchPassword}
@@ -600,7 +814,7 @@ function StudentManager({
               className="inline-flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-[8px] bg-stone-900 px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-stone-300"
             >
               <KeyRound size={16} />
-              선택 학생 비밀번호 변경
+              비밀번호 변경
             </button>
             <button
               type="button"
@@ -609,33 +823,50 @@ function StudentManager({
               className="inline-flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-[8px] border border-red-200 bg-white px-4 text-sm font-bold text-red-600 disabled:cursor-not-allowed disabled:border-stone-200 disabled:text-stone-400"
             >
               <Trash2 size={16} />
-              선택 학생 일괄 삭제
+              삭제
             </button>
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          {sorted.map((student) => {
+        <div className="mt-4 overflow-hidden rounded-[8px] border border-stone-200 bg-white">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[920px] text-left text-sm">
+              <thead className="bg-stone-50 text-xs font-bold uppercase text-stone-500">
+                <tr>
+                  <th className="w-12 px-3 py-3">
+                    <input type="checkbox" checked={allSelected} onChange={toggleAllSelected} />
+                  </th>
+                  <th className="w-16 px-3 py-3">번호</th>
+                  <th className="px-3 py-3">이름</th>
+                  <th className="px-3 py-3">학생 ID</th>
+                  <th className="px-3 py-3">클래스</th>
+                  <th className="px-3 py-3">현재 비밀번호</th>
+                  <th className="px-3 py-3">가입일</th>
+                  <th className="px-3 py-3 text-right">관리</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {sorted.map((student, index) => {
             const isNameEditing = editingUid === student.uid;
             const isPasswordEditing = passwordUid === student.uid;
             const isSelected = selectedUids.includes(student.uid);
 
             return (
-              <article
+              <tr
                 key={student.uid}
-                className="rounded-[8px] border border-stone-200 bg-lime-50 p-4"
+                className={isSelected ? 'bg-amber-50/70' : 'bg-white'}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <label className="mt-1 inline-flex items-center gap-2 text-sm font-bold text-stone-700">
+                <td className="px-3 py-3 align-middle">
                     <input
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => toggleSelected(student.uid)}
                     />
-                    선택
-                  </label>
-
-                  <div className="min-w-0 flex-1">
+                </td>
+                <td className="px-3 py-3 align-middle font-semibold text-stone-500">
+                  {index + 1}
+                </td>
+                <td className="px-3 py-3 align-middle">
                     {isNameEditing ? (
                       <div className="flex gap-2">
                         <input
@@ -646,9 +877,19 @@ function StudentManager({
                         <button
                           type="button"
                           onClick={() => saveStudentName(student)}
-                          className="rounded-[8px] bg-stone-900 px-3 text-sm font-bold text-white"
+                          className="rounded-[8px] bg-stone-900 px-3 text-xs font-bold text-white"
                         >
                           저장
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingUid(null);
+                            setNameDraft('');
+                          }}
+                          className="rounded-[8px] border border-stone-300 bg-white px-3 text-xs font-bold text-stone-700"
+                        >
+                          취소
                         </button>
                       </div>
                     ) : (
@@ -667,27 +908,47 @@ function StudentManager({
                         </button>
                       </div>
                     )}
-
-                    <p className="mt-1 text-sm text-stone-600">{student.id}</p>
-                    <p className="mt-1 text-sm text-stone-600">
-                      현재 비밀번호: {student.passwordHint || '별도 관리'}
-                    </p>
-
+                </td>
+                <td className="px-3 py-3 align-middle font-semibold text-stone-600">
+                  {student.id}
+                </td>
+                <td className="px-3 py-3 align-middle">
+                  <select
+                    value={student.classId || ''}
+                    onChange={(event) => saveStudentClass(student, event.target.value)}
+                    className="h-9 w-full rounded-[8px] border border-stone-200 bg-white px-2 text-sm font-semibold text-stone-700"
+                  >
+                    <option value="">미분류</option>
+                    {studentClasses.map((studentClass) => (
+                      <option key={studentClass.id} value={studentClass.id}>
+                        {studentClass.name}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="px-3 py-3 align-middle text-stone-600">
+                  {student.passwordHint || '별도 관리'}
+                </td>
+                <td className="px-3 py-3 align-middle text-stone-500">
+                  {dateText(student.createdAt)}
+                </td>
+                <td className="px-3 py-3 align-middle">
+                  <div className="flex justify-end gap-2">
                     {isPasswordEditing ? (
-                      <div className="mt-3 flex flex-wrap gap-2">
+                      <>
                         <input
                           type="password"
                           minLength={6}
                           autoComplete="new-password"
                           value={passwordDraft}
                           onChange={(event) => setPasswordDraft(event.target.value)}
-                          className="h-10 min-w-0 flex-1 rounded-[8px] border border-stone-200 px-3"
+                          className="h-9 w-36 rounded-[8px] border border-stone-200 px-3"
                           placeholder="새 비밀번호"
                         />
                         <button
                           type="button"
                           onClick={() => saveStudentPassword(student)}
-                          className="rounded-[8px] bg-stone-900 px-3 text-sm font-bold text-white"
+                          className="rounded-[8px] bg-stone-900 px-3 text-xs font-bold text-white"
                         >
                           저장
                         </button>
@@ -697,27 +958,26 @@ function StudentManager({
                             setPasswordUid(null);
                             setPasswordDraft('');
                           }}
-                          className="rounded-[8px] border border-stone-300 bg-white px-3 text-sm font-bold text-stone-700"
+                          className="rounded-[8px] border border-stone-300 bg-white px-3 text-xs font-bold text-stone-700"
                         >
                           취소
                         </button>
-                      </div>
+                      </>
                     ) : (
-                      <div className="mt-3 flex flex-wrap gap-2">
+                      <>
                         <button
                           type="button"
                           onClick={() => {
                             setPasswordUid(student.uid);
                             setPasswordDraft(student.passwordHint || '');
                           }}
-                          className="inline-flex items-center gap-1 rounded-[8px] border border-stone-300 bg-white px-3 py-2 text-sm font-bold text-stone-700"
+                          className="inline-flex items-center gap-1 rounded-[8px] border border-stone-300 bg-white px-3 py-2 text-xs font-bold text-stone-700"
                         >
                           <KeyRound size={15} />
-                          개별 비밀번호 변경
+                          비밀번호
                         </button>
-                      </div>
+                      </>
                     )}
-                  </div>
 
                   <button
                     type="button"
@@ -727,15 +987,177 @@ function StudentManager({
                   >
                     <Trash2 size={16} />
                   </button>
-                </div>
-              </article>
+                  </div>
+                </td>
+              </tr>
             );
-          })}
+                })}
+              </tbody>
+            </table>
+          </div>
           {!sorted.length && (
-            <p className="text-sm text-stone-500">생성된 학생 계정이 아직 없습니다.</p>
+            <p className="px-4 py-8 text-center text-sm text-stone-500">
+              {students.length ? '조건에 맞는 학생이 없습니다.' : '생성된 학생 계정이 아직 없습니다.'}
+            </p>
           )}
         </div>
       </section>
+
+      {classManagerOpen && (
+        <div className="fixed inset-0 z-30 overflow-y-auto bg-stone-950/45 px-4 py-6">
+          <div className="mx-auto w-full max-w-2xl rounded-[18px] bg-white p-5 shadow-soft">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-stone-950">클래스 관리</h2>
+                <p className="mt-1 text-sm text-stone-500">
+                  클래스를 삭제해도 학생 계정은 삭제되지 않고 미분류로 이동합니다.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClassManagerOpen(false)}
+                className="rounded-full p-2 hover:bg-stone-100"
+                aria-label="클래스 관리 닫기"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => openClassModal()}
+              disabled={studentClasses.length >= 30}
+              className="mt-5 inline-flex items-center gap-2 rounded-[8px] bg-stone-900 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-stone-300"
+            >
+              <Plus size={16} />
+              클래스 추가
+            </button>
+            <div className="mt-4 space-y-2">
+              {!studentClasses.length && (
+                <p className="rounded-[8px] border border-dashed border-stone-200 p-4 text-sm text-stone-500">
+                  아직 만든 클래스가 없습니다.
+                </p>
+              )}
+              {studentClasses.map((studentClass) => (
+                <div
+                  key={studentClass.id}
+                  className="flex items-center justify-between gap-3 rounded-[8px] border border-stone-200 p-3"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="h-3 w-3 shrink-0 rounded-full"
+                        style={{
+                          backgroundColor:
+                            folderColorValue(studentClass.color) || DEFAULT_WALL_CARD_COLOR
+                        }}
+                      />
+                      <p className="truncate text-sm font-bold text-stone-900">
+                        {studentClass.name}
+                      </p>
+                    </div>
+                    <p className="mt-1 text-xs text-stone-500">
+                      학생 {classCounts[studentClass.id] || 0}명
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => openClassModal(studentClass)}
+                      className="rounded-full p-2 text-stone-500 hover:bg-stone-100 hover:text-stone-900"
+                      aria-label={`${studentClass.name} 수정`}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeClass(studentClass)}
+                      className="rounded-full p-2 text-stone-500 hover:bg-red-50 hover:text-red-600"
+                      aria-label={`${studentClass.name} 삭제`}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {classModalOpen && (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-stone-950/45 px-4">
+          <form onSubmit={saveClass} className="w-full max-w-md rounded-[18px] bg-white p-5 shadow-soft">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-stone-950">
+                  {classEditing ? '클래스 수정' : '클래스 만들기'}
+                </h2>
+                <p className="mt-1 text-sm text-stone-500">클래스는 최대 30개까지 만들 수 있습니다.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClassModalOpen(false)}
+                className="rounded-full p-2 hover:bg-stone-100"
+                aria-label="클래스 모달 닫기"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <label className="mt-5 block">
+              <span className="text-sm font-bold text-stone-800">클래스 이름</span>
+              <input
+                value={className}
+                onChange={(event) => setClassName(event.target.value)}
+                maxLength={20}
+                className="mt-2 h-11 w-full rounded-[8px] border border-stone-200 px-3 text-sm outline-none focus:border-stone-900"
+                placeholder="예: 3학년 1반"
+              />
+            </label>
+            <div className="mt-5">
+              <p className="text-sm font-bold text-stone-800">클래스 색상</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {FOLDER_COLOR_OPTIONS.map((option) => {
+                  const selected = classColor === option.value;
+                  return (
+                    <button
+                      key={option.name}
+                      type="button"
+                      onClick={() => setClassColor(option.value)}
+                      className={`grid h-8 w-8 place-items-center rounded-full border transition ${
+                        selected
+                          ? 'border-stone-900 ring-2 ring-stone-900/15'
+                          : 'border-stone-200 hover:border-stone-400'
+                      }`}
+                      title={option.name}
+                      aria-label={`클래스 색상 ${option.name}`}
+                    >
+                      {option.swatch ? (
+                        <span
+                          className="h-5 w-5 rounded-full"
+                          style={{ backgroundColor: option.swatch }}
+                        />
+                      ) : (
+                        <span className="h-5 w-5 rounded-full border border-dashed border-stone-300 bg-white" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="mt-5 flex items-center justify-between text-xs font-semibold text-stone-500">
+              <span>{className.trim().length}/20자</span>
+              <span>{studentClasses.length}/30개 사용 중</span>
+            </div>
+            <button
+              type="submit"
+              disabled={!className.trim() || (!classEditing && studentClasses.length >= 30)}
+              className="mt-4 h-11 w-full rounded-[8px] bg-stone-900 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-stone-300"
+            >
+              {classEditing ? '저장' : '클래스 만들기'}
+            </button>
+          </form>
+        </div>
+      )}
 
       {studentCreateMode === 'single' && (
         <div className="fixed inset-0 z-30 grid place-items-center bg-stone-950/45 px-4">
@@ -787,6 +1209,20 @@ function StudentManager({
                   }
                   className="h-11 w-full rounded-[8px] border border-stone-200 px-3"
                 />
+              </Field>
+              <Field label="클래스">
+                <select
+                  value={singleForm.classId}
+                  onChange={(e) => setSingleForm({ ...singleForm, classId: e.target.value })}
+                  className="h-11 w-full rounded-[8px] border border-stone-200 bg-white px-3"
+                >
+                  <option value="">미분류</option>
+                  {studentClasses.map((studentClass) => (
+                    <option key={studentClass.id} value={studentClass.id}>
+                      {studentClass.name}
+                    </option>
+                  ))}
+                </select>
               </Field>
             </div>
             <button
@@ -857,6 +1293,20 @@ function StudentManager({
                   }
                   className="h-11 w-full rounded-[8px] border border-stone-200 px-3"
                 />
+              </Field>
+              <Field label="클래스">
+                <select
+                  value={form.classId}
+                  onChange={(e) => setForm({ ...form, classId: e.target.value })}
+                  className="h-11 w-full rounded-[8px] border border-stone-200 bg-white px-3"
+                >
+                  <option value="">미분류</option>
+                  {studentClasses.map((studentClass) => (
+                    <option key={studentClass.id} value={studentClass.id}>
+                      {studentClass.name}
+                    </option>
+                  ))}
+                </select>
               </Field>
             </div>
             <div className="mt-4">

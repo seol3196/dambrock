@@ -16,6 +16,7 @@ import {
   toPost,
   toPostImage,
   toPublicUser,
+  toStudentClass,
   toWall,
   toWallFolder
 } from './db.js';
@@ -162,6 +163,10 @@ function normalizeFolderName(value) {
   return String(value || '').trim().slice(0, 20);
 }
 
+function normalizeStudentClassName(value) {
+  return String(value || '').trim().slice(0, 20);
+}
+
 const FOLDER_COLOR_PRESETS = new Set([
   '#fde8ef',
   '#fdebd8',
@@ -191,6 +196,24 @@ function normalizeFolderColor(value) {
   const error = new Error('invalid-folder-color');
   error.status = 400;
   throw error;
+}
+
+function normalizeStudentClassColor(value) {
+  return normalizeFolderColor(value);
+}
+
+function normalizeStudentClassId(value, ownerId) {
+  const classId = String(value || '').trim();
+  if (!classId) return null;
+  const studentClass = db
+    .prepare('SELECT * FROM student_classes WHERE id = ? AND owner_id = ?')
+    .get(classId, ownerId);
+  if (!studentClass) {
+    const error = new Error('student-class-not-found');
+    error.status = 400;
+    throw error;
+  }
+  return studentClass.id;
 }
 
 function normalizeHtmlTitle(value) {
@@ -973,14 +996,15 @@ app.post('/api/users', requireUser, requireTeacherOrAdmin, (req, res) => {
   const uid = id('usr_');
   const displayName = String(req.body.displayName || loginId).trim();
   const teacherId = role === 'student' ? req.body.teacherId || req.user.uid : null;
+  const classId = role === 'student' ? normalizeStudentClassId(req.body.classId, teacherId) : null;
   const passwordHint = req.body.passwordHint || null;
   const storageLimitBytes =
     role === 'teacher' ? normalizeStorageLimit(req.body.storageLimitBytes) : 0;
   try {
     db.prepare(
       `INSERT INTO users
-       (uid, login_id, password_hash, role, display_name, teacher_id, password_hint, storage_limit_bytes, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (uid, login_id, password_hash, role, display_name, teacher_id, class_id, password_hint, storage_limit_bytes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       uid,
       loginId,
@@ -988,6 +1012,7 @@ app.post('/api/users', requireUser, requireTeacherOrAdmin, (req, res) => {
       role,
       displayName,
       teacherId,
+      classId,
       passwordHint,
       storageLimitBytes,
       now()
@@ -1011,6 +1036,12 @@ app.patch('/api/users/:uid', requireUser, (req, res) => {
   if (!canEdit) return res.status(403).json({ error: 'forbidden' });
 
   const displayName = String(req.body.displayName || target.display_name).trim();
+  const canEditClass =
+    req.user.role === 'teacher' && target.role === 'student' && target.teacher_id === req.user.uid;
+  const classId =
+    canEditClass && req.body.classId !== undefined
+      ? normalizeStudentClassId(req.body.classId, req.user.uid)
+      : target.class_id || null;
   const canHostHtml =
     req.user.role === 'admin' && target.role === 'teacher' && req.body.canHostHtml != null
       ? req.body.canHostHtml
@@ -1026,8 +1057,8 @@ app.patch('/api/users/:uid', requireUser, (req, res) => {
     return res.status(400).json({ error: 'storage-limit-below-used' });
   }
   db.prepare(
-    'UPDATE users SET display_name = ?, can_host_html = ?, storage_limit_bytes = ?, updated_at = ? WHERE uid = ?'
-  ).run(displayName, canHostHtml, storageLimitBytes, now(), target.uid);
+    'UPDATE users SET display_name = ?, class_id = ?, can_host_html = ?, storage_limit_bytes = ?, updated_at = ? WHERE uid = ?'
+  ).run(displayName, classId, canHostHtml, storageLimitBytes, now(), target.uid);
   res.json({ user: toPublicUser(db.prepare('SELECT * FROM users WHERE uid = ?').get(target.uid)) });
 });
 
@@ -1080,6 +1111,83 @@ app.post('/api/users/passwords', requireUser, requireTeacherOrAdmin, (req, res) 
   });
   change();
   res.json({ count: uids.length });
+});
+
+app.get('/api/student-classes', requireUser, requireRole('teacher'), (req, res) => {
+  const ownerId = req.query.ownerId || req.user.uid;
+  if (ownerId !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
+  const rows = db
+    .prepare('SELECT * FROM student_classes WHERE owner_id = ? ORDER BY name ASC')
+    .all(ownerId);
+  res.json({ items: rows.map(toStudentClass) });
+});
+
+app.post('/api/student-classes', requireUser, requireRole('teacher'), (req, res) => {
+  const name = normalizeStudentClassName(req.body.name);
+  const color = normalizeStudentClassColor(req.body.color);
+  if (!name) return res.status(400).json({ error: 'student-class-name-required' });
+  const count = db
+    .prepare('SELECT COUNT(*) AS count FROM student_classes WHERE owner_id = ?')
+    .get(req.user.uid).count;
+  if (count >= 30) return res.status(400).json({ error: 'student-class-limit-reached' });
+
+  const classId = id('class_');
+  try {
+    db.prepare(
+      `INSERT INTO student_classes (id, owner_id, name, color, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(classId, req.user.uid, name, color, now());
+  } catch (error) {
+    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'student-class-name-exists' });
+    }
+    throw error;
+  }
+  res.status(201).json({
+    studentClass: toStudentClass(db.prepare('SELECT * FROM student_classes WHERE id = ?').get(classId))
+  });
+});
+
+app.patch('/api/student-classes/:id', requireUser, requireRole('teacher'), (req, res) => {
+  const studentClass = db.prepare('SELECT * FROM student_classes WHERE id = ?').get(req.params.id);
+  if (!studentClass) return res.status(404).json({ error: 'not-found' });
+  if (studentClass.owner_id !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
+  const name = normalizeStudentClassName(req.body.name);
+  const color =
+    req.body.color === undefined
+      ? studentClass.color || null
+      : normalizeStudentClassColor(req.body.color);
+  if (!name) return res.status(400).json({ error: 'student-class-name-required' });
+  try {
+    db.prepare('UPDATE student_classes SET name = ?, color = ?, updated_at = ? WHERE id = ?').run(
+      name,
+      color,
+      now(),
+      studentClass.id
+    );
+  } catch (error) {
+    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'student-class-name-exists' });
+    }
+    throw error;
+  }
+  res.json({
+    studentClass: toStudentClass(db.prepare('SELECT * FROM student_classes WHERE id = ?').get(studentClass.id))
+  });
+});
+
+app.delete('/api/student-classes/:id', requireUser, requireRole('teacher'), (req, res) => {
+  const studentClass = db.prepare('SELECT * FROM student_classes WHERE id = ?').get(req.params.id);
+  if (!studentClass) return res.status(404).json({ error: 'not-found' });
+  if (studentClass.owner_id !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
+  db.transaction(() => {
+    db.prepare('UPDATE users SET class_id = NULL, updated_at = ? WHERE class_id = ?').run(
+      now(),
+      studentClass.id
+    );
+    db.prepare('DELETE FROM student_classes WHERE id = ?').run(studentClass.id);
+  })();
+  res.json({ ok: true });
 });
 
 app.get('/api/wall-folders', requireUser, requireRole('teacher'), (req, res) => {
