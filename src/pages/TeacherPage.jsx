@@ -8,6 +8,7 @@ import {
   Globe2,
   HardDrive,
   KeyRound,
+  MoreHorizontal,
   Pencil,
   Plus,
   Printer,
@@ -1023,6 +1024,7 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
   const [folderName, setFolderName] = useState('');
   const [activeFolderId, setActiveFolderId] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [wallMenuOpenId, setWallMenuOpenId] = useState(null);
   const folderById = useMemo(
     () => Object.fromEntries(folders.map((folder) => [folder.id, folder])),
     [folders]
@@ -1547,65 +1549,105 @@ function WallManager({ form, setForm, submit, walls, folders, origin }) {
           {sortedWalls.map((wall) => (
             <article
               key={wall.id}
-              className={`rounded-[8px] border border-stone-200 p-4 ${wallTone(wall.id)}`}
+              className={`relative rounded-[8px] border border-stone-200 p-4 ${wallTone(wall.id)}`}
             >
-              <h3 className="text-lg font-bold">{wall.title}</h3>
-              <p className="mt-1 text-sm text-stone-600">
-                {wall.description || '설명이 아직 없습니다.'}
-              </p>
-              <p className="mt-3 text-xs text-stone-500">생성 시간 {dateText(wall.createdAt)}</p>
-              <label className="mt-3 block text-xs font-bold text-stone-600">
-                폴더
-                <select
-                  value={wall.folderId || ''}
-                  onChange={(event) => moveWallToFolder(wall, event.target.value)}
-                  className="mt-1 h-9 w-full rounded-[8px] border border-stone-200 bg-white/80 px-2 text-sm font-semibold text-stone-800"
-                >
-                  <option value="">미분류</option>
-                  {folders.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="mt-3 flex items-center justify-between gap-3 rounded-[10px] bg-white/65 px-3 py-2">
-                <span>
-                  <b className="block text-sm text-stone-800">학생 홈페이지에 이 담벼락을 공개</b>
-                  <span className="text-xs text-stone-500">
-                    끄면 학생 목록에서는 숨기고 링크 접속은 유지합니다.
-                  </span>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={wall.visibleToStudents !== false}
-                  onChange={() => toggleStudentDashboardVisibility(wall)}
-                />
-              </label>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => copyWallLink(wall.id)}
-                  className="inline-flex items-center gap-1 rounded-[8px] bg-white px-3 py-2 text-sm font-bold"
-                >
-                  <Copy size={15} />
-                  링크 복사
-                </button>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="truncate pr-2 text-lg font-bold">{wall.title}</h3>
+                  <p className="mt-1 line-clamp-2 text-sm leading-6 text-stone-600">
+                    {wall.description || '설명이 아직 없습니다.'}
+                  </p>
+                </div>
+                <div className="relative shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setWallMenuOpenId((current) => (current === wall.id ? null : wall.id))
+                    }
+                    className="grid h-9 w-9 place-items-center rounded-full bg-white/70 text-stone-600 shadow-sm transition hover:bg-white hover:text-stone-950"
+                    aria-label={`${wall.title} 더보기`}
+                    aria-expanded={wallMenuOpenId === wall.id}
+                  >
+                    <MoreHorizontal size={18} />
+                  </button>
+                  {wallMenuOpenId === wall.id && (
+                    <div className="absolute right-0 top-11 z-20 w-72 rounded-[12px] border border-stone-200 bg-white p-3 text-stone-800 shadow-soft">
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-400">
+                            정보
+                          </p>
+                          <p className="mt-1 text-sm font-bold text-stone-700">
+                            생성 시간 {dateText(wall.createdAt)}
+                          </p>
+                          <p className="mt-1 text-sm text-stone-500">
+                            현재 폴더 {folderById[wall.folderId]?.name || '미분류'}
+                          </p>
+                        </div>
+                        <label className="block text-xs font-bold text-stone-600">
+                          폴더
+                          <select
+                            value={wall.folderId || ''}
+                            onChange={(event) => moveWallToFolder(wall, event.target.value)}
+                            className="mt-1 h-9 w-full rounded-[8px] border border-stone-200 bg-white px-2 text-sm font-semibold text-stone-800"
+                          >
+                            <option value="">미분류</option>
+                            {folders.map((folder) => (
+                              <option key={folder.id} value={folder.id}>
+                                {folder.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex items-center justify-between gap-3 rounded-[10px] bg-stone-50 px-3 py-2">
+                          <span>
+                            <b className="block text-sm text-stone-800">학생 홈페이지 공개</b>
+                            <span className="text-xs text-stone-500">
+                              끄면 학생 목록에서는 숨깁니다.
+                            </span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={wall.visibleToStudents !== false}
+                            onChange={() => toggleStudentDashboardVisibility(wall)}
+                            className="h-4 w-4 shrink-0 accent-stone-900"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            copyWallLink(wall.id);
+                            setWallMenuOpenId(null);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-[8px] px-3 py-2 text-left text-sm font-bold text-stone-700 hover:bg-stone-50"
+                        >
+                          <Copy size={15} />
+                          링크 복사
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWallMenuOpenId(null);
+                            removeWall(wall);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-[8px] px-3 py-2 text-left text-sm font-bold text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 size={15} />
+                          삭제
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="mt-5">
                 <Link
                   to={`/wall/${wall.id}`}
-                  className="inline-flex items-center gap-1 rounded-[8px] bg-stone-900 px-3 py-2 text-sm font-bold text-white"
+                  className="inline-flex items-center gap-1 rounded-[8px] bg-stone-900 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-stone-700"
                 >
                   <ExternalLink size={15} />
                   들어가기
                 </Link>
-                <button
-                  type="button"
-                  onClick={() => removeWall(wall)}
-                  className="inline-flex items-center gap-1 rounded-[8px] bg-white px-3 py-2 text-sm font-bold text-red-600"
-                >
-                  <Trash2 size={15} />
-                  삭제
-                </button>
               </div>
             </article>
           ))}
