@@ -55,6 +55,7 @@ export function toHtmlSite(row) {
     slug: row.slug,
     title: row.title,
     ownerId: row.owner_id,
+    sizeBytes: row.size_bytes || 0,
     urlPath: `/h/${row.slug}`,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -272,6 +273,7 @@ export function initDb() {
       slug TEXT NOT NULL UNIQUE,
       title TEXT NOT NULL,
       owner_id TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT
     );
@@ -302,6 +304,11 @@ export function initDb() {
     db.prepare('ALTER TABLE users ADD COLUMN class_id TEXT').run();
   }
   db.prepare('CREATE INDEX IF NOT EXISTS idx_users_class ON users(class_id)').run();
+
+  const htmlSiteColumns = db.prepare('PRAGMA table_info(html_sites)').all();
+  if (!htmlSiteColumns.some((column) => column.name === 'size_bytes')) {
+    db.prepare('ALTER TABLE html_sites ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0').run();
+  }
 
   const wallColumns = db.prepare('PRAGMA table_info(walls)').all();
   if (!wallColumns.some((column) => column.name === 'show_author_names')) {

@@ -226,7 +226,7 @@ export default function AdminPage() {
         <section className="rounded-[8px] bg-white/90 p-5 shadow-soft xl:col-span-2">
           <h2 className="text-xl font-bold">교사별 사진 저장 용량</h2>
           <p className="mt-1 text-sm text-stone-500">
-            학생이 올린 사진도 해당 담벼락을 만든 교사의 저장 용량을 사용합니다.
+            학생이 올린 사진과 교사가 호스팅한 HTML 파일이 해당 교사의 저장 용량을 사용합니다.
           </p>
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {storageAccounts.map((account) => {

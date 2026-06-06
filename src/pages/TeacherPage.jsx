@@ -1374,7 +1374,8 @@ function HtmlHostingManager({ sites, origin }) {
       setMessage(`${origin}${data.site.urlPath} 주소로 발급했습니다.`);
     } catch (error) {
       const code = error?.code || '';
-      if (code === 'html-too-large') setMessage('HTML 파일은 5MB 이하만 업로드할 수 있습니다.');
+      if (code === 'html-too-large') setMessage('HTML 파일은 100MB 이하만 업로드할 수 있습니다.');
+      else if (code === 'storage-limit-exceeded') setMessage('교사 계정에 할당된 저장 용량을 초과했습니다.');
       else if (code === 'html-required') setMessage('비어 있는 HTML 파일은 업로드할 수 없습니다.');
       else setMessage('HTML 파일을 업로드하지 못했습니다.');
     } finally {
@@ -1445,6 +1446,7 @@ function HtmlHostingManager({ sites, origin }) {
         </button>
         {message && <p className="mt-3 break-all text-sm font-bold text-emerald-700">{message}</p>}
         <p className="mt-3 text-sm leading-6 text-stone-600">
+          HTML 파일은 100MB 이하만 업로드할 수 있고, 교사 계정의 저장 용량을 사용합니다.
           업로드된 파일은 서버 로컬의 data/html-sites 폴더에 저장됩니다.
         </p>
       </form>
@@ -1456,7 +1458,9 @@ function HtmlHostingManager({ sites, origin }) {
             <article key={site.id} className="rounded-[8px] border border-stone-200 bg-amber-50 p-4">
               <h3 className="font-bold text-stone-950">{site.title}</h3>
               <p className="mt-1 break-all text-sm text-stone-600">{origin}{site.urlPath}</p>
-              <p className="mt-2 text-xs text-stone-500">생성 시간 {dateText(site.createdAt)}</p>
+              <p className="mt-2 text-xs text-stone-500">
+                생성 시간 {dateText(site.createdAt)} · {storageText(site.sizeBytes)}
+              </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"

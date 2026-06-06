@@ -29,7 +29,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const CLIENT_DIR = fs.existsSync(DIST) ? DIST : ROOT;
 const HTML_SITES_DIR = path.join(path.dirname(DB_PATH), 'html-sites');
 const POST_IMAGES_DIR = path.join(path.dirname(DB_PATH), 'post-images');
-const MAX_HTML_BYTES = 1024 * 1024 * 5;
+const MAX_HTML_BYTES = 1024 * 1024 * 100;
 const DEFAULT_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024 * 10;
 const MAX_POST_IMAGES = 8;
 const MAX_IMAGE_BYTES = 1024 * 1024 * 100;
@@ -37,6 +37,7 @@ const MAX_IMAGE_BYTES = 1024 * 1024 * 100;
 initDb();
 fs.mkdirSync(HTML_SITES_DIR, { recursive: true });
 fs.mkdirSync(POST_IMAGES_DIR, { recursive: true });
+syncHtmlSiteStorageMetadata();
 
 const app = express();
 const uploadPostImages = multer({
@@ -46,7 +47,7 @@ const uploadPostImages = multer({
     fileSize: MAX_IMAGE_BYTES
   }
 });
-app.use(express.json({ limit: '6mb' }));
+app.use(express.json({ limit: '110mb' }));
 app.use('/uploads/post-images', express.static(POST_IMAGES_DIR));
 
 function tokenFrom(req) {
@@ -249,6 +250,12 @@ function htmlSiteFile(siteId) {
   return path.join(HTML_SITES_DIR, siteId, 'index.html');
 }
 
+function htmlSiteSize(siteId) {
+  const filePath = htmlSiteFile(siteId);
+  if (!fs.existsSync(filePath)) return 0;
+  return fs.statSync(filePath).size;
+}
+
 function writeHtmlSiteFile(siteId, html) {
   const filePath = htmlSiteFile(siteId);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -257,6 +264,40 @@ function writeHtmlSiteFile(siteId, html) {
 
 function removeHtmlSiteFiles(siteId) {
   fs.rmSync(path.join(HTML_SITES_DIR, siteId), { recursive: true, force: true });
+}
+
+function recalculateStorageUsed() {
+  const totals = new Map();
+  const imageTotals = db
+    .prepare('SELECT owner_id, SUM(size_bytes) AS bytes FROM post_images GROUP BY owner_id')
+    .all();
+  const htmlTotals = db
+    .prepare('SELECT owner_id, SUM(size_bytes) AS bytes FROM html_sites GROUP BY owner_id')
+    .all();
+
+  for (const row of [...imageTotals, ...htmlTotals]) {
+    totals.set(row.owner_id, (totals.get(row.owner_id) || 0) + Number(row.bytes || 0));
+  }
+
+  db.transaction(() => {
+    db.prepare('UPDATE users SET storage_used_bytes = 0').run();
+    const update = db.prepare(
+      'UPDATE users SET storage_used_bytes = ?, updated_at = ? WHERE uid = ?'
+    );
+    for (const [ownerId, bytes] of totals) update.run(bytes, now(), ownerId);
+  })();
+}
+
+function syncHtmlSiteStorageMetadata() {
+  const sites = db.prepare('SELECT * FROM html_sites').all();
+  const update = db.prepare('UPDATE html_sites SET size_bytes = ?, updated_at = ? WHERE id = ?');
+  db.transaction(() => {
+    for (const site of sites) {
+      const sizeBytes = htmlSiteSize(site.id);
+      if (Number(site.size_bytes || 0) !== sizeBytes) update.run(sizeBytes, now(), site.id);
+    }
+  })();
+  recalculateStorageUsed();
 }
 
 function makeSiteSlug() {
@@ -350,9 +391,8 @@ function normalizePostImageFiles(files, user) {
   return images;
 }
 
-function assertStorageAvailable(user, files) {
-  if (!files.length) return;
-  const totalSize = files.reduce((sum, image) => sum + image.file.size, 0);
+function assertStorageBytesAvailable(user, totalSize) {
+  if (!totalSize) return;
   const limit = user.storage_limit_bytes;
   if (limit == null) return;
   if ((user.storage_used_bytes || 0) + totalSize > limit) {
@@ -360,6 +400,28 @@ function assertStorageAvailable(user, files) {
     error.status = 413;
     throw error;
   }
+}
+
+function assertStorageAvailable(user, files) {
+  if (!files.length) return;
+  const totalSize = files.reduce((sum, image) => sum + image.file.size, 0);
+  assertStorageBytesAvailable(user, totalSize);
+}
+
+function incrementStorageUsed(ownerId, bytes) {
+  if (!bytes) return;
+  db.prepare(
+    'UPDATE users SET storage_used_bytes = storage_used_bytes + ?, updated_at = ? WHERE uid = ?'
+  ).run(bytes, now(), ownerId);
+}
+
+function decrementStorageUsed(ownerId, bytes) {
+  if (!bytes) return;
+  db.prepare(
+    `UPDATE users
+     SET storage_used_bytes = MAX(0, storage_used_bytes - ?), updated_at = ?
+     WHERE uid = ?`
+  ).run(bytes, now(), ownerId);
 }
 
 function storageOwnerForWall(wall) {
@@ -411,11 +473,7 @@ function decrementStorageForImages(imageRows) {
     byOwner.set(image.owner_id, (byOwner.get(image.owner_id) || 0) + Number(image.size_bytes || 0));
   }
   for (const [ownerId, bytes] of byOwner) {
-    db.prepare(
-      `UPDATE users
-       SET storage_used_bytes = MAX(0, storage_used_bytes - ?), updated_at = ?
-       WHERE uid = ?`
-    ).run(bytes, now(), ownerId);
+    decrementStorageUsed(ownerId, bytes);
   }
 }
 
@@ -510,9 +568,7 @@ function savePostImages(postId, ownerId, files) {
         );
       }
       const totalSize = rows.reduce((sum, row) => sum + row.sizeBytes, 0);
-      db.prepare(
-        'UPDATE users SET storage_used_bytes = storage_used_bytes + ?, updated_at = ? WHERE uid = ?'
-      ).run(totalSize, now(), ownerId);
+      incrementStorageUsed(ownerId, totalSize);
     })();
   } catch (error) {
     removeImageFiles(rows.map((row) => ({ stored_name: row.storedName })));
@@ -1853,16 +1909,21 @@ app.post('/api/html-sites', requireUser, requireHtmlHosting, (req, res) => {
   const slug = makeSiteSlug();
   const title = normalizeHtmlTitle(req.body.title);
   const html = normalizeHtml(req.body.html);
-
-  db.prepare(
-    `INSERT INTO html_sites (id, slug, title, owner_id, created_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(siteId, slug, title, req.user.uid, now());
+  const sizeBytes = Buffer.byteLength(html, 'utf8');
+  assertStorageBytesAvailable(req.user, sizeBytes);
 
   try {
     writeHtmlSiteFile(siteId, html);
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO html_sites (id, slug, title, owner_id, size_bytes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(siteId, slug, title, req.user.uid, sizeBytes, now());
+      incrementStorageUsed(req.user.uid, sizeBytes);
+    })();
   } catch (error) {
     db.prepare('DELETE FROM html_sites WHERE id = ?').run(siteId);
+    removeHtmlSiteFiles(siteId);
     throw error;
   }
 
@@ -1875,7 +1936,10 @@ app.delete('/api/html-sites/:id', requireUser, requireHtmlHosting, (req, res) =>
   const site = db.prepare('SELECT * FROM html_sites WHERE id = ?').get(req.params.id);
   if (!site) return res.status(404).json({ error: 'not-found' });
   if (site.owner_id !== req.user.uid) return res.status(403).json({ error: 'forbidden' });
-  db.prepare('DELETE FROM html_sites WHERE id = ?').run(site.id);
+  db.transaction(() => {
+    db.prepare('DELETE FROM html_sites WHERE id = ?').run(site.id);
+    decrementStorageUsed(site.owner_id, Number(site.size_bytes || 0));
+  })();
   removeHtmlSiteFiles(site.id);
   res.json({ ok: true });
 });
